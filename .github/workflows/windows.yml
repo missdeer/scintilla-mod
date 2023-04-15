@@ -3,11 +3,13 @@ on:
   push:
     paths-ignore:
       - 'README.md'
-      - 'LICENSE'
+      - 'License.txt'
+      - '.github/workflows/sync.yml'
   pull_request:
     paths-ignore:
       - 'README.md'
-      - 'LICENSE'
+      - 'License.txt'
+      - '.github/workflows/sync.yml'
 env:
   WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/irc_nas/19078/w_BaseKit_p_2023.0.0.25940_offline.exe
   WINDOWS_HPCKIT_URL: https://registrationcenter-download.intel.com/akdlm/irc_nas/19085/w_HPCKit_p_2023.0.0.25931_offline.exe
@@ -16,7 +18,6 @@ env:
   COMPILER_VERSION: 2023.0.0
   BOOST_URL: https://boostorg.jfrog.io/artifactory/main/release/1.81.0/source/boost_1_81_0.tar.gz
   BOOST_PKG: boost_1_81_0
-      
       
 jobs:          
   win64-msvc:
