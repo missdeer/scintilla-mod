@@ -1,0 +1,35 @@
+name: Sync with notepad2
+
+on:
+  schedule:
+    - cron:  '5 4 * * *'
+  push:
+    branches:
+      - 'master'
+    paths:
+      - '.github/workflows/sync.yml'
+
+jobs:
+  sync-scintilla:
+    runs-on: ubuntu-latest      
+    steps:    
+        - name: Check out code into the Go module directory
+          uses: actions/checkout@v2
+          
+        - name: Set up Git
+          env:
+            GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}        
+          run: |
+            git config user.name "auto-sync-scintilla[bot]"
+            git config user.email "auto-sync-scintilla[bot]@users.noreply.github.com"
+            git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+    
+        - name: update
+          run: |
+            git clone https://github.com/zufuliu/notepad2.git
+            cp -r notepad2/scintilla/* ./
+            rm -rf notepad2
+            git add .
+            git commit -m "auto update scintilla at $(date)" .
+            git push -f origin master
+      
