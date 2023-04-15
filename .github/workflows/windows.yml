@@ -104,7 +104,7 @@ jobs:
       - name: upload executable artifact
         uses: actions/upload-artifact@v1
         with:
-          path: build\bin
+          path: build\lib
           name: scintilla-clang-cl
           
       - name: uploadRelease
