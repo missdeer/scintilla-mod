@@ -35,7 +35,7 @@ jobs:
       - name: build-msvc
         shell: cmd
         env:
-          vc_arch: ${{ matrix.msvc_arch }}
+          vc_arch: x64
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
           set PATH=%PATH%;%CD%\jom
@@ -88,7 +88,7 @@ jobs:
       - name: build-clang-cl
         shell: cmd
         env:
-          vc_arch: ${{ matrix.msvc_arch }}
+          vc_arch: x64
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
           set PATH=%PATH%;%CD%\llvm\bin;%CD%\jom
@@ -155,7 +155,7 @@ jobs:
       - name: build-intel-msvc
         shell: cmd
         env:
-          vc_arch: ${{ matrix.msvc_arch }}
+          vc_arch: x64
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
           call "C:\Program Files (x86)\Intel\oneAPI\compiler\${{ env.COMPILER_VERSION }}\env\vars.bat"
