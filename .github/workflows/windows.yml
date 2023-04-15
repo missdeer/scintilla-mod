@@ -1,0 +1,264 @@
+name: Windows
+on: 
+  push:
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+env:
+  WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/irc_nas/19078/w_BaseKit_p_2023.0.0.25940_offline.exe
+  WINDOWS_HPCKIT_URL: https://registrationcenter-download.intel.com/akdlm/irc_nas/19085/w_HPCKit_p_2023.0.0.25931_offline.exe
+  WINDOWS_CPP_COMPONENTS: intel.oneapi.win.cpp-compiler
+  WINDOWS_DPCPP_COMPONENTS: intel.oneapi.win.dpcpp-compiler
+  COMPILER_VERSION: 2023.0.0
+  BOOST_URL: https://boostorg.jfrog.io/artifactory/main/release/1.81.0/source/boost_1_81_0.tar.gz
+  BOOST_PKG: boost_1_81_0
+      
+      
+jobs:          
+  win64-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.head_ref }}
+          submodules: true
+      
+      - name: Install boost
+        run: |
+          curl -O -L ${{ env.BOOST_URL }}
+          tar -z -xf ${{ env.BOOST_PKG }}".tar.gz"
+
+      - name: build-msvc
+        shell: cmd
+        env:
+          vc_arch: ${{ matrix.msvc_arch }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
+          set PATH=%PATH%;%CD%\jom
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -G Ninja ..
+          ninja
+          mkdir lib
+          copy *scintilla.lib lib\
+          cd ..
+          
+      - name: upload executable artifact
+        uses: actions/upload-artifact@v1
+        with:
+          path: build\lib
+          name: ainesmile-msvc
+          
+      - name: uploadRelease
+        if: startsWith(github.event.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GH_TOKEN }}
+          file: ainesmile-msvc.zip
+          asset_name: ainesmile-msvc.zip
+          tag: ${{ github.ref }}
+          overwrite: true 
+          
+  win64-clang-msvc:
+    runs-on: windows-latest
+    steps:                              
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.head_ref }}
+          submodules: true
+                
+      - name: Set up clang for Windows
+        shell: cmd
+        run: |
+          mkdir llvm
+          cd llvm
+          curl.exe -o LLVM.exe -L ${{ matrix.clang_link }}
+          7z.exe x LLVM.exe
+          cd ..
+      
+      - name: Install boost
+        run: |
+          curl -O -L ${{ env.BOOST_URL }}
+          tar -z -xf ${{ env.BOOST_PKG }}".tar.gz"
+                
+      - name: build-clang-cl
+        shell: cmd
+        env:
+          vc_arch: ${{ matrix.msvc_arch }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
+          set PATH=%PATH%;%CD%\llvm\bin;%CD%\jom
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl  -G Ninja ..
+          ninja
+          mkdir lib
+          copy *scintilla.lib lib\
+          cd ..
+          
+      - name: upload executable artifact
+        uses: actions/upload-artifact@v1
+        with:
+          path: build\bin
+          name: scintilla-clang-cl
+          
+      - name: uploadRelease
+        if: startsWith(github.event.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GH_TOKEN }}
+          file: scintilla-clang-cl.zip
+          asset_name: scintilla-clang-cl.zip
+          tag: ${{ github.ref }}
+          overwrite: true 
+          
+  win64-intel-msvc:
+    runs-on: windows-latest      
+    steps:                    
+      - name: cache intel install
+        id: cache-install
+        uses: actions/cache@v2
+        with:
+          path: |
+              C:\Program Files (x86)\Intel\oneAPI\setvars-vcvarsall.bat
+              C:\Program Files (x86)\Intel\oneAPI\compiler
+          key: install-${{ env.CACHE_NUMBER }}-${{ env.WINDOWS_HPCKIT_URL }}-${{ env.WINDOWS_CPP_COMPONENTS }}-compiler-${{ hashFiles('**/scripts/cache_exclude_windows.sh') }}
+
+      - name: install intel
+        if: steps.cache-install.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 https://github.com/oneapi-src/oneapi-ci.git oneapi-ci
+          cd oneapi-ci
+          scripts/install_windows.bat ${{ env.WINDOWS_HPCKIT_URL }} ${{ env.WINDOWS_CPP_COMPONENTS }}
+          
+      - name: restore registry on cache hit
+        if: steps.cache-install.outputs.cache-hit == 'true'
+        run:  |
+          git clone --depth=1 https://github.com/oneapi-src/oneapi-ci.git oneapi-ci
+          cd oneapi-ci
+          scripts/restore_registry.bat ${{ env.COMPILER_VERSION }}
+        
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.head_ref }}
+          submodules: true
+      
+      - name: Install boost
+        run: |
+          curl -O -L ${{ env.BOOST_URL }}
+          tar -z -xf ${{ env.BOOST_PKG }}".tar.gz"
+                
+      - name: build-intel-msvc
+        shell: cmd
+        env:
+          vc_arch: ${{ matrix.msvc_arch }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %vc_arch%
+          call "C:\Program Files (x86)\Intel\oneAPI\compiler\${{ env.COMPILER_VERSION }}\env\vars.bat"
+          set PATH="C:\Program Files (x86)\Intel\oneAPI\compiler\${{ env.COMPILER_VERSION }}\windows\bin-llvm\";%CD%\jom;%PATH%
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -G Ninja ..
+          ninja
+          mkdir lib
+          copy *scintilla.lib lib\
+          cd ..
+          
+      - name: upload executable artifact
+        uses: actions/upload-artifact@v1
+        with:
+          path: build\lib
+          name: scintilla-intel-oneAPI
+          
+      - name: uploadRelease
+        if: startsWith(github.event.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GH_TOKEN }}
+          file: scintilla-intel-oneAPI.zip
+          asset_name: scintilla-intel-oneAPI.zip
+          tag: ${{ github.ref }}
+          overwrite: true 
+
+  Windows-MinGW:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - build_arch: mingw64-ucrt-gcc
+            mingw_arch: UCRT64 
+            mingw_prefix: mingw-w64-ucrt-x86_64
+            toolchains: gcc
+            c: gcc
+            cxx: g++
+          - build_arch: mingw64-gcc
+            mingw_arch: MINGW64 
+            mingw_prefix: mingw-w64-x86_64
+            toolchains: gcc
+            c: gcc
+            cxx: g++
+          - build_arch: mingw32-gcc
+            mingw_arch: MINGW32
+            mingw_prefix: mingw-w64-i686
+            toolchains: gcc
+            c: gcc
+            cxx: g++
+          - build_arch: clang64-clang
+            mingw_arch: CLANG64 
+            mingw_prefix: mingw-w64-clang-x86_64
+            toolchains: clang
+            c: clang
+            cxx: clang++
+          - build_arch: clang32-clang
+            mingw_arch: CLANG32
+            mingw_prefix: mingw-w64-clang-i686
+            toolchains: clang
+            c: clang
+            cxx: clang++
+          
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{ matrix.mingw_arch }}
+          install: zip make git ${{ matrix.mingw_prefix }}-${{ matrix.toolchains }} ${{ matrix.mingw_prefix }}-make ${{ matrix.mingw_prefix }}-cmake ${{ matrix.mingw_prefix }}-openssl ${{ matrix.mingw_prefix }}-boost ${{ matrix.mingw_prefix }}-zstd
+          
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 1
+          submodules: true
+          
+      - name: Build 
+        shell: msys2 {0}
+        run: |
+          mkdir build
+          cd build
+          env PATH=$PATH:/${{ matrix.mingw_arch }}/bin cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=${{ matrix.c }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -G Ninja ..
+          env PATH=$PATH:/${{ matrix.mingw_arch }}/bin ninja
+          mkdir lib
+          cp libscintilla.a lib/
+          cd ..
+
+      - name: upload executable artifact
+        uses: actions/upload-artifact@v1
+        with:
+          path: build\lib
+          name: scintilla-${{ matrix.build_arch }}
+
+      - name: Compress release
+        if: startsWith(github.event.ref, 'refs/tags/')
+        run: powershell Compress-Archive build\lib scintilla-${{ matrix.build_arch }}.zip
+        
+      - name: uploadRelease
+        if: startsWith(github.event.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GH_TOKEN }}
+          file: scintilla-${{ matrix.build_arch }}.zip
+          asset_name: scintilla-${{ matrix.build_arch }}.zip
+          tag: ${{ github.ref }}
+          overwrite: true
