@@ -51,15 +51,15 @@ jobs:
         uses: actions/upload-artifact@v1
         with:
           path: build\lib
-          name: ainesmile-msvc
+          name: scintilla-msvc
           
       - name: uploadRelease
         if: startsWith(github.event.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GH_TOKEN }}
-          file: ainesmile-msvc.zip
-          asset_name: ainesmile-msvc.zip
+          file: scintilla-msvc.zip
+          asset_name: scintilla-msvc.zip
           tag: ${{ github.ref }}
           overwrite: true 
           
