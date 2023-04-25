@@ -77,7 +77,7 @@ jobs:
         run: |
           mkdir llvm
           cd llvm
-          curl.exe -o LLVM.exe -L ${{ matrix.clang_link }}
+          curl.exe -o LLVM.exe -L https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.2/LLVM-16.0.2-win64.exe
           7z.exe x LLVM.exe
           cd ..
       
