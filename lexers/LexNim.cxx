@@ -44,16 +44,15 @@ struct EscapeSequence {
 	void resetEscapeState(int state, int chNext) noexcept {
 		outerState = state;
 		digitsLeft = 0;
-		hex = false;
+		hex = true;
 		brace = false;
 		if (chNext == 'x') {
 			digitsLeft = 3;
-			hex = true;
 		} else if (chNext == 'u') {
 			digitsLeft = 5;
-			hex = true;
 		} else if (IsADigit(chNext)) {
 			digitsLeft = 7;
+			hex = false;
 		} else {
 			digitsLeft = 1;
 		}
@@ -145,12 +144,6 @@ enum class KeywordType {
 	Pragma = SCE_NIM_PRAGMA,
 	Function = SCE_NIM_FUNCTION_DEFINITION,
 };
-
-constexpr bool IsMultilineStyle(int style) noexcept {
-	return style == SCE_NIM_COMMENT
-		|| style == SCE_NIM_COMMENTDOC
-		|| IsTripleString(style);
-}
 
 void ColouriseNimDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, LexerWordList keywordLists, Accessor &styler) {
 	KeywordType kwType = KeywordType::None;
@@ -344,6 +337,9 @@ void ColouriseNimDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSty
 
 		case SCE_NIM_COMMENT:
 		case SCE_NIM_COMMENTDOC:
+			if (sc.atLineStart) {
+				lineState = PyLineStateMaskCommentLine;
+			}
 			if (sc.ch == '#' && ((sc.state == SCE_NIM_COMMENT) ? (sc.chNext == '[') : sc.MatchNext('#', '['))) {
 				++commentLevel;
 				sc.Forward((sc.state == SCE_NIM_COMMENT) ? 1 : 2);
@@ -429,9 +425,9 @@ void ColouriseNimDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSty
 		if (sc.atLineEnd) {
 			if (!nestedState.empty()) {
 				lineState = PyLineStateStringInterpolation | PyLineStateMaskTripleQuote;
-			} else if (IsMultilineStyle(sc.state)) {
+			} else if (IsTripleString(sc.state)) {
 				lineState = PyLineStateMaskTripleQuote;
-			} else if (visibleChars == 0) {
+			} else if (lineState == 0 && visibleChars == 0) {
 				lineState = PyLineStateMaskEmptyLine;
 			}
 			lineState |= (indentCount << 16) | (commentLevel << 8);
