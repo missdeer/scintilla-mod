@@ -1002,11 +1002,13 @@ void ColourisePHPDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSty
 			break;
 
 		case SCE_H_ENTITY:
-			// https://html.spec.whatwg.org/entities.json
-			if (sc.ch == ';') {
-				sc.ForwardSetState(SCE_H_DEFAULT);
-			} else if (!IsAlphaNumeric(sc.ch)) {
-				sc.ChangeState(SCE_H_DEFAULT);
+			if (!IsAlphaNumeric(sc.ch)) {
+				if (sc.ch == ';') {
+					sc.Forward();
+				} else {
+					sc.ChangeState(SCE_H_TAGUNKNOWN);
+				}
+				sc.SetState(SCE_H_DEFAULT);
 			}
 			break;
 
@@ -1234,12 +1236,9 @@ void ColourisePHPDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSty
 					}
 				}
 			} else if (sc.ch == '&') {
-				if (IsAlpha(sc.chNext)) {
+				if (IsAlpha(sc.chNext) || sc.chNext == '#') {
 					sc.SetState(SCE_H_ENTITY);
-				} else if (sc.chNext == '#') {
-					const int chNext = sc.GetRelative(2);
-					if (IsADigit(chNext) || (UnsafeLower(chNext) == 'x' && IsHexDigit(sc.GetRelative(3)))) {
-						sc.SetState(SCE_H_ENTITY);
+					if (sc.chNext == '#') {
 						sc.Forward();
 					}
 				}

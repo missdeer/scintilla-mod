@@ -398,12 +398,12 @@ void FoldLuaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, L
 			if (wordLen < MaxFoldWordLength) {
 				word[wordLen++] = ch;
 			}
-			if (styleNext != SCE_SH_WORD) {
+			if (styleNext != SCE_LUA_WORD) {
 				word[wordLen] = '\0';
 				wordLen = 0;
 				if (StrEqualsAny(word, "if", "do", "function", "repeat")) {
 					levelNext++;
-				} else if (StrEqualsAny(word, "end", "elseif", "until")) {
+				} else if (StrEqualsAny(word, "end", "until")) {
 					levelNext--;
 				}
 			}

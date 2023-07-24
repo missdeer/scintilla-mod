@@ -62,7 +62,7 @@ script_type segIsScriptingIndicator(LexAccessor &styler, Sci_PositionU start, Sc
 }
 
 script_type ScriptOfState(int state) noexcept {
-	if ((state >= SCE_HB_START) && (state <= SCE_HB_OPERATOR)) {
+	if ((state >= SCE_HB_START && state <= SCE_HB_OPERATOR) || state == SCE_H_ASPAT || state == SCE_H_XCCOMMENT) {
 		return eScriptVBS;
 	}
 	if ((state >= SCE_HJ_START) && (state <= SCE_HJ_TEMPLATELITERAL)) {
@@ -105,6 +105,11 @@ constexpr bool IsNumberChar(char ch) noexcept {
 	return IsADigit(ch) || ch == '.' || ch == '-' || ch == '#';
 }
 
+constexpr bool IsEntityChar(int ch) noexcept {
+	// Only allow [A-Za-z0-9.#-_:] in entities
+	return IsAlphaNumeric(ch) || AnyOf(ch, '#', '.', '-', '_', ':');
+}
+
 constexpr bool isStringState(int state) noexcept {
 	switch (state) {
 	case SCE_HJ_DOUBLESTRING:
@@ -122,14 +127,13 @@ constexpr bool isStringState(int state) noexcept {
 }
 
 constexpr bool stateAllowsTermination(int state, int ch) noexcept {
-	bool allowTermination = !isStringState(state);
-	if (allowTermination) {
-		switch (state) {
-		case SCE_HB_COMMENTLINE:
-			allowTermination = ch == '%'; // %>
+	if (!isStringState(state)) {
+		if (state == SCE_H_ASP || state == SCE_H_ASPAT || state == SCE_H_XCCOMMENT || state >= SCE_HJ_START) {
+			return ch == '%'; // ASP, JSP %>
 		}
+		return ch == '?'; // XML ?>
 	}
-	return allowTermination;
+	return false;
 }
 
 // not really well done, since it's only comments that should lex the %> and <%
@@ -536,7 +540,7 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 			case SCE_HJ_COMMENTDOC:
 			//case SCE_HJ_COMMENTLINE: // removed as this is a common thing done to hide
 			// the end of script marker from some JS interpreters.
-			case SCE_HB_COMMENTLINE:
+			//case SCE_HB_COMMENTLINE:
 			case SCE_HBA_COMMENTLINE:
 			case SCE_HJ_DOUBLESTRING:
 			case SCE_HJ_SINGLESTRING:
@@ -548,7 +552,7 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 			default :
 				// check if the closing tag is a script tag
 				{
-					const bool match = (state == SCE_HJ_COMMENTLINE || isXml) ? styler.MatchLowerCase(i + 2, "script")
+					const bool match = (state == SCE_HJ_COMMENTLINE || state == SCE_HB_COMMENTLINE || isXml) ? styler.MatchLowerCase(i + 2, "script")
 						: ((state == SCE_H_COMMENT) ? styler.MatchLowerCase(i + 2, "comment") : true);
 					if (!match) {
 						break;
@@ -608,7 +612,10 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 				inScriptType = eNonHtmlScriptPreProc;
 			else
 				inScriptType = eNonHtmlPreProc;
-
+			// fold whole script
+			if (foldHTMLPreprocessor) {
+				levelCurrent++;
+			}
 			if (chNext2 == '@') {
 				i += 2; // place as if it was the second next char treated
 				state = SCE_H_ASPAT;
@@ -629,9 +636,6 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 				scriptLanguage = aspScript;
 			}
 			styler.ColorTo(i + 1, SCE_H_ASP);
-			// fold whole script
-			if (foldHTMLPreprocessor)
-				levelCurrent++;
 			// should be better
 			ch = static_cast<unsigned char>(styler.SafeGetCharAt(i));
 			continue;
@@ -667,8 +671,7 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 
 		// handle the end of a pre-processor = Non-HTML
 		else if ((((inScriptType == eNonHtmlPreProc) || (inScriptType == eNonHtmlScriptPreProc)) &&
-				  (((scriptLanguage != eScriptNone) && stateAllowsTermination(state, ch))) &&
-				  (((ch == '%') || (ch == '?')) && (chNext == '>'))) ||
+				  ((scriptLanguage != eScriptNone) && (chNext == '>') && stateAllowsTermination(state, ch))) ||
 		         ((scriptLanguage == eScriptSGML) && (ch == '>') && (state != SCE_H_SGML_COMMENT))) {
 			if (state == SCE_H_ASPAT) {
 				aspScript = segIsScriptingIndicator(styler, styler.GetStartSegment(), i, aspScript);
@@ -728,7 +731,7 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 				styler.ColorTo(i, StateToPrint);
 				if (chNext != '!')
 					state = SCE_H_TAGUNKNOWN;
-			} else if (ch == '&') {
+			} else if (ch == '&' && (IsAlpha(chNext) || chNext == '#')) {
 				styler.ColorTo(i, SCE_H_DEFAULT);
 				state = SCE_H_ENTITY;
 			}
@@ -871,26 +874,19 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 			}
 			break;
 		case SCE_H_SGML_ENTITY:
-			if (ch == ';') {
-				styler.ColorTo(i + 1, StateToPrint);
-				state = SCE_H_SGML_DEFAULT;
-			} else if (!(IsAlphaNumeric(ch) || ch == '-' || ch == '.')) {
-				styler.ColorTo(i + 1, SCE_H_SGML_ERROR);
+			if (!(IsAlphaNumeric(ch) || ch == '-' || ch == '.')) {
+				styler.ColorTo(i + 1, ((ch == ';') ? StateToPrint : SCE_H_SGML_ERROR));
 				state = SCE_H_SGML_DEFAULT;
 			}
 			break;
 		case SCE_H_ENTITY:
-			if (ch == ';') {
-				styler.ColorTo(i + 1, StateToPrint);
+			if (!IsEntityChar(ch)) {
+				styler.ColorTo(i + (ch == ';'), ((ch == ';') ? StateToPrint : SCE_H_TAGUNKNOWN));
 				state = SCE_H_DEFAULT;
-			}
-			if (ch != '#' && !IsAlphaNumeric(ch)	// Should check that '#' follows '&', but it is unlikely anyway...
-				&& ch != '.' && ch != '-' && ch != '_' && ch != ':') { // valid in XML
-				if (ch >= 0x80)	// Possibly start of a multibyte character so don't allow this byte to be in entity style
-					styler.ColorTo(i, SCE_H_TAGUNKNOWN);
-				else
-					styler.ColorTo(i + 1, SCE_H_TAGUNKNOWN);
-				state = SCE_H_DEFAULT;
+				if (ch != ';') {
+					--i;
+					continue;
+				}
 			}
 			break;
 		case SCE_H_TAGUNKNOWN:
