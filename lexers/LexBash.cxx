@@ -95,8 +95,7 @@ constexpr int translateBashDigit(int ch) noexcept {
 	return 64;
 }
 
-constexpr bool IsBashNumber(int ch, int base) noexcept {
-	const int digit = translateBashDigit(ch);
+constexpr bool IsBashNumber(int digit, int base) noexcept {
 	return digit < base || (digit >= 36 && base <= 36 && digit - 26 < base);
 }
 
@@ -230,9 +229,9 @@ public:
 
 class QuoteStackCls {	// Class to manage quote pairs that nest
 public:
-	int Depth = 0;
+	unsigned Depth = 0;
 	int State = SCE_SH_DEFAULT;
-	int backtickLevel = 0;
+	unsigned backtickLevel = 0;
 	QuoteCls Current;
 	QuoteCls Stack[BASH_QUOTE_STACK_MAX];
 	bool lineContinuation = false;
@@ -322,9 +321,9 @@ public:
 				// optimized to avoid track nested delimiter pairs
 				return;
 			}
-		} else if (sc.ch == '`') {	// $` seen in a configure script, valid?
-			style = QuoteStyle::Backtick;
-			sc.ChangeState(SCE_SH_BACKTICKS);
+		//} else if (sc.ch == '`' && backtickLevel == 0) {	// $` seen in a configure script, valid?
+		//	style = QuoteStyle::Backtick;
+		//	sc.ChangeState(SCE_SH_BACKTICKS);
 		} else {
 			// scalar has no delimiter pair
 			if (!IsBashParamStart(sc.ch, isCShell)) {
@@ -336,12 +335,12 @@ public:
 		sc.Forward();
 	}
 	void Escape(StyleContext &sc) {
-		int count = 1;
+		unsigned count = 1;
 		while (sc.chNext == '\\') {
 			++count;
 			sc.Forward();
 		}
-		bool escaped = count & 1; // odd backslash escape next character
+		bool escaped = count & 1U; // odd backslash escape next character
 		if (escaped && IsEOLChar(sc.chNext)) {
 			lineContinuation = true;
 			if (sc.state == SCE_SH_IDENTIFIER) {
@@ -359,22 +358,22 @@ public:
 			* when $N = m\times 2^k + 2^{k - 1} - 1$ and $k > 1$, following backtick ends current substitution.
 			*/
 			if (sc.chNext == '$') {
-				escaped = (count >> backtickLevel) & 1;
+				escaped = (count >> backtickLevel) & 1U;
 			} else if (sc.chNext == '\"' || sc.chNext == '\'') {
-				escaped = (((count - 1) >> backtickLevel) & 1) == 0;
+				escaped = (((count - 1) >> backtickLevel) & 1U) == 0;
 			} else if (sc.chNext == '`' && escaped) {
-				int mask = 1 << (backtickLevel + 1);
+				unsigned mask = 1U << (backtickLevel + 1);
 				count += 1;
 				escaped = (count & (mask - 1)) == 0;
 				if (!escaped) {
-					int remain = count - (mask >> 1);
-					if (remain >= 0 && (remain & (mask - 1)) == 0) {
+					unsigned remain = count - (mask >> 1U);
+					if (static_cast<int>(remain) >= 0 && (remain & (mask - 1)) == 0) {
 						escaped = true;
 						++backtickLevel;
 					} else if (backtickLevel > 1) {
-						mask >>= 1;
-						remain = count - (mask >> 1);
-						if (remain >= 0 && (remain & (mask - 1)) == 0) {
+						mask >>= 1U;
+						remain = count - (mask >> 1U);
+						if (static_cast<int>(remain) >= 0 && (remain & (mask - 1)) == 0) {
 							escaped = true;
 							--backtickLevel;
 						}
@@ -534,15 +533,20 @@ void ColouriseBashDoc(Sci_PositionU startPos, Sci_Position length, int initStyle
 			}
 			break;
 		case SCE_SH_IDENTIFIER:
-			if (sc.chPrev == '\\' || !IsBashWordChar(sc.ch, cmdState)) {
+			if (!IsBashWordChar(sc.ch, cmdState)) {
 				sc.SetState(SCE_SH_DEFAULT);
 			}
 			break;
-		case SCE_SH_NUMBER:
-			if (!IsBashNumber(sc.ch, numBase)) {
-				sc.SetState(SCE_SH_DEFAULT);
+		case SCE_SH_NUMBER: {
+			const int digit = translateBashDigit(sc.ch);
+			if (!IsBashNumber(digit, numBase)) {
+				if (digit < 62 || digit == 63) {
+					sc.ChangeState(SCE_SH_IDENTIFIER);
+				} else {
+					sc.SetState(SCE_SH_DEFAULT);
+				}
 			}
-			break;
+		} break;
 		case SCE_SH_COMMENTLINE:
 			if (sc.MatchLineEnd()) {
 				sc.SetState(SCE_SH_DEFAULT);
