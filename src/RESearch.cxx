@@ -2,7 +2,6 @@
 /** @file RESearch.cxx
  ** Regular expression search library.
  **/
-#ifndef SCI_OWNREGEX
 
 /*
  * regex - Regular expression pattern matching and replacement
@@ -35,8 +34,7 @@
  * Interfaces:
  *  RESearch::Compile:      compile a regular expression into a NFA.
  *
- *          const char *RESearch::Compile(const char *pattern, int length,
- *                                        bool caseSensitive, bool posix)
+ *          const char *RESearch::Compile(const char *pattern, int length, int flags)
  *
  * Returns a short error string if they fail.
  *
@@ -208,6 +206,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <array>
 #include <algorithm>
 #include <iterator>
 
@@ -247,7 +246,11 @@ using namespace Scintilla::Internal;
 #define BLKIND  0370
 #define BITIND  07
 
+#ifndef NDEBUG
 #define badpat(x)	(*nfa = END, x)
+#else
+#define badpat(x)	(*nfa = END, "")
+#endif
 
 /*
  * Character classification table for word boundary operators BOW
@@ -257,12 +260,11 @@ using namespace Scintilla::Internal;
  */
 
 RESearch::RESearch(const CharClassify *charClassTable) {
-	failure = 0;
 	charClass = charClassTable;
+	lineStartPos = 0;
+	lineEndPos = 0;
 	sta = NOP;                  /* status of lastpat */
-	bol = 0;
-	previousPattern = nullptr;
-	previousLength = 0;
+	failure = 0;
 	previousFlags = FindOption::None;
 	constexpr unsigned char nul = 0;
 	std::fill(bittab, std::end(bittab), nul);
@@ -271,31 +273,9 @@ RESearch::RESearch(const CharClassify *charClassTable) {
 	Clear();
 }
 
-void RESearch::ClearCache() noexcept {
-	sta = NOP;
-	previousPattern = nullptr;
-	previousLength = 0;
-	previousFlags = FindOption::None;
-}
-
 void RESearch::Clear() noexcept {
-	for (int i = 0; i < MAXTAG; i++) {
-		pat[i].clear();
-		bopat[i] = NOTFOUND;
-		eopat[i] = NOTFOUND;
-	}
-}
-
-void RESearch::GrabMatches(const CharacterIndexer &ci) {
-	for (unsigned int i = 0; i < MAXTAG; i++) {
-		if ((bopat[i] != NOTFOUND) && (eopat[i] != NOTFOUND)) {
-			const Sci::Position len = eopat[i] - bopat[i];
-			pat[i].resize(len);
-			for (Sci::Position j = 0; j < len; j++) {
-				pat[i][j] = ci.CharAt(bopat[i] + j);
-			}
-		}
-	}
+	bopat.fill(NOTFOUND);
+	eopat.fill(NOTFOUND);
 }
 
 void RESearch::ChSet(unsigned char c) noexcept {
@@ -359,9 +339,7 @@ constexpr int isinset(const char *ap, unsigned char c) noexcept {
  * @return the char if it resolves to a simple char,
  * or -1 for a char class. In this case, bittab is changed.
  */
-int RESearch::GetBackslashExpression(
-	const char *pattern,
-	int &incr) noexcept {
+int RESearch::GetBackslashExpression(const char *pattern, int &incr) noexcept {
 	// Since error reporting is primitive and messages are not used anyway,
 	// I choose to interpret unexpected syntax in a logical way instead
 	// of reporting errors. Otherwise, we can stick on, eg., PCRE behaviour.
@@ -444,28 +422,24 @@ int RESearch::GetBackslashExpression(
 	return result;
 }
 
-const char *RESearch::Compile(const char *pattern, Sci::Position length, bool caseSensitive, FindOption flags) {
-	if (sta == OKP && (pattern == nullptr || length == 0
-		|| (pattern == previousPattern
-			&& length == previousLength
-			&& flags == previousFlags
-			&& memcmp(pattern, cachedPattern.data(), length) == 0)
-	)) {
+const char *RESearch::Compile(const char *pattern, size_t length, FindOption flags) {
+	if (sta == OKP && (flags == previousFlags
+		&& length == cachedPattern.length()
+		&& memcmp(pattern, cachedPattern.data(), length) == 0)) {
 		return nullptr;
 	}
 
-	const bool posix = FlagSet(flags, FindOption::Posix);
-	const char * const errmsg = DoCompile(pattern, length, caseSensitive, posix);
+	const char * const errmsg = DoCompile(pattern, length, flags);
 	if (errmsg == nullptr) {
-		previousPattern = pattern;
-		previousLength = length;
 		previousFlags = flags;
 		cachedPattern.assign(pattern, length);
 	}
 	return errmsg;
 }
 
-const char *RESearch::DoCompile(const char *pattern, Sci::Position length, bool caseSensitive, bool posix) noexcept {
+const char *RESearch::DoCompile(const char *pattern, size_t length, FindOption flags) noexcept {
+	const bool caseSensitive = FlagSet(flags, FindOption::MatchCase);
+	const bool posix = FlagSet(flags, FindOption::Posix);
 	char *mp = nfa;          /* nfa pointer       */
 	char *sp = nfa;          /* another one       */
 	const char *mpMax = mp + MAXNFA - BITBLK - 10;
@@ -473,16 +447,10 @@ const char *RESearch::DoCompile(const char *pattern, Sci::Position length, bool 
 	int tagi = 0;          /* tag stack index   */
 	int tagc = 1;          /* actual tag count  */
 
-	if (pattern == nullptr || length == 0) {
-		if (sta)
-			return nullptr;
-		else
-			return badpat("No previous regular expression");
-	}
 	sta = NOP;
 
 	const char *p = pattern;     /* pattern pointer   */
-	for (int i = 0; i < length; i++, p++) {
+	for (unsigned int i = 0; i < length; i++, p++) {
 		if (mp > mpMax)
 			return badpat("Pattern too long");
 		char *lp = mp;			/* saved pointer     */
@@ -788,9 +756,8 @@ const char *RESearch::DoCompile(const char *pattern, Sci::Position length, bool 
  */
 int RESearch::Execute(const CharacterIndexer &ci, Sci::Position lp, Sci::Position endp) {
 	Sci::Position ep = NOTFOUND;
-	char *ap = nfa;
+	const char * const ap = nfa;
 
-	bol = lp;
 	failure = 0;
 
 	Clear();
@@ -801,7 +768,7 @@ int RESearch::Execute(const CharacterIndexer &ci, Sci::Position lp, Sci::Positio
 		ep = PMatch(ci, lp, endp, ap);
 		break;
 	case EOL:			/* just searching for end of line normal path doesn't work */
-		if (*(ap + 1) == END) {
+		if (endp == lineEndPos && ap[1] == END) {
 			lp = endp;
 			ep = lp;
 			break;
@@ -809,14 +776,14 @@ int RESearch::Execute(const CharacterIndexer &ci, Sci::Position lp, Sci::Positio
 			return 0;
 		}
 	case CHR: {			/* ordinary char: locate it fast */
-		const unsigned char c = *(ap + 1);
+		const unsigned char c = ap[1];
 		while ((lp < endp) && (static_cast<unsigned char>(ci.CharAt(lp)) != c)) {
 			lp++;
 		}
 		if (lp >= endp)	/* if EOS, fail, else fall through. */
 			return 0;
-		[[fallthrough]];
 	}
+	[[fallthrough]];
 	default:			/* regular matching all the way. */
 		while (lp < endp) {
 			ep = PMatch(ci, lp, endp, ap);
@@ -828,9 +795,22 @@ int RESearch::Execute(const CharacterIndexer &ci, Sci::Position lp, Sci::Positio
 	case END:			/* munged automaton. fail always */
 		return 0;
 	}
-	if (ep == NOTFOUND)
-		return 0;
+	if (ep == NOTFOUND) {
+		/* similar to EOL, match EOW at line end */
+		if (endp == lineEndPos && *ap == EOW) {
+			if ((ap[1] == END || ((ap[1] == EOL && ap[2] == END))) && iswordc(ci.CharAt(lp - 1))) {
+				lp = endp;
+				ep = lp;
+			} else {
+				return 0;
+			}
+		} else {
+			return 0;
+		}
+	}
 
+	lp = ci.MovePositionOutsideChar(lp, -1);
+	ep = ci.MovePositionOutsideChar(ep, 1);
 	bopat[0] = lp;
 	eopat[0] = ep;
 	return 1;
@@ -875,7 +855,7 @@ int RESearch::Execute(const CharacterIndexer &ci, Sci::Position lp, Sci::Positio
 #define CHRSKIP 3	/* [CLO] CHR chr END      */
 #define CCLSKIP 34	/* [CLO] CCL 32 bytes END */
 
-Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci::Position endp, char *ap) {
+Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci::Position endp, const char *ap) {
 	uint8_t op;
 
 	while ((op = *ap++) != END) {
@@ -897,11 +877,11 @@ Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci
 			ap += BITBLK;
 			break;
 		case BOL:
-			if (lp != bol)
+			if (lp != lineStartPos)
 				return NOTFOUND;
 			break;
 		case EOL:
-			if (lp < endp)
+			if (lp < lineEndPos)
 				return NOTFOUND;
 			break;
 		case BOT:
@@ -913,11 +893,11 @@ Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci
 			eopat[static_cast<unsigned char>(*ap++)] = lp;
 			break;
 		case BOW:
-			if ((lp != bol && iswordc(ci.CharAt(lp - 1))) || !iswordc(ci.CharAt(lp)))
+			if ((lp != lineStartPos && iswordc(ci.CharAt(lp - 1))) || !iswordc(ci.CharAt(lp)))
 				return NOTFOUND;
 			break;
 		case EOW:
-			if (lp == bol || !iswordc(ci.CharAt(lp - 1)) || iswordc(ci.CharAt(lp)))
+			if (lp == lineStartPos || !iswordc(ci.CharAt(lp - 1)) || iswordc(ci.CharAt(lp)))
 				return NOTFOUND;
 			break;
 		case REF: {
@@ -947,7 +927,7 @@ Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci
 				n = ANYSKIP;
 				break;
 			case CHR: {
-				const char c = *(ap + 1);
+				const char c = ap[1];
 				if (op == CLO || op == LCLO) {
 					while ((lp < endp) && (c == ci.CharAt(lp))) {
 						lp++;
@@ -993,5 +973,3 @@ Sci::Position RESearch::PMatch(const CharacterIndexer &ci, Sci::Position lp, Sci
 	}
 	return lp;
 }
-
-#endif // SCI_OWNREGEX

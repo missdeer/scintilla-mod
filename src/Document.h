@@ -98,13 +98,11 @@ class RegexSearchBase {
 public:
 	virtual ~RegexSearchBase() = default;
 
-	virtual Sci::Position FindText(const Document *doc, Sci::Position minPos, Sci::Position maxPos, const char *s,
-		bool caseSensitive, Scintilla::FindOption flags, Sci::Position *length) = 0;
+	virtual Sci::Position FindText(const Document *doc, Sci::Position minPos, Sci::Position maxPos, const char *pattern,
+		Scintilla::FindOption flags, Sci::Position *length) = 0;
 
 	///@return String with the substitutions, must remain valid until the next call or destruction
 	virtual const char *SubstituteByPosition(Document *doc, const char *text, Sci::Position *length) = 0;
-
-	virtual void ClearCache() noexcept {};
 };
 
 /// Factory function for RegexSearchBase
