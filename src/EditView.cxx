@@ -430,13 +430,16 @@ struct LayoutWorker {
 		}
 	}
 
-	uint32_t Start(Sci::Position posLineStart, uint32_t posInLine) {
+	uint32_t Start(Sci::Position posLineStart, uint32_t posInLine, LayoutLineOption option) {
 		const int startPos = ll->lastSegmentEnd;
 		const int endPos = ll->numCharsInLine;
 		if (endPos - startPos > blockSize*2 && !model.BidirectionalEnabled()) {
 			posInLine = std::max<uint32_t>(posInLine, ll->caretPosition) + blockSize;
 			if (posInLine > static_cast<uint32_t>(endPos)) {
 				posInLine = endPos;
+			} else if (option < LayoutLineOption::IdleUpdate) {
+				// layout as much as possible to avoid unexpected scrolling
+				model.SetIdleTaskTime(EditModel::IdleLineWrapTime);
 			}
 		} else {
 			posInLine = endPos;
@@ -663,7 +666,7 @@ uint64_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 		//const ElapsedPeriod period;
 		//posInLine = ll->numCharsInLine; // whole line
 		LayoutWorker worker{ ll, vstyle, surface, posCache, model, {}};
-		const uint32_t threadCount = worker.Start(posLineStart, posInLine);
+		const uint32_t threadCount = worker.Start(posLineStart, posInLine, option);
 
 		// Accumulate absolute positions from relative positions within segments and expand tabs
 		const uint32_t finishedCount = worker.finishedCount.load(std::memory_order_relaxed);
@@ -2266,17 +2269,11 @@ void DrawFoldLines(Surface *surface, const EditModel &model, const ViewStyle &vs
 			vsDraw.markers[static_cast<int>(MarkerOutline::Folder)].fore);
 		// Paint the line above the fold
 		// Paint the line above the fold
-		if ((subLine == 0) &&
-			((expanded && (FlagSet(model.foldFlags, FoldFlag::LineBeforeExpanded)))
-			||
-			(!expanded && (FlagSet(model.foldFlags, FoldFlag::LineBeforeContracted))))) {
+		if ((subLine == 0) && FlagSet(model.foldFlags, (expanded ? FoldFlag::LineBeforeContracted : FoldFlag::LineBeforeExpanded))) {
 			surface->FillRectangleAligned(Side(rcLine, Edge::top, 1.0), foldLineColour);
 		}
 		// Paint the line below the fold
-		if (lastSubLine &&
-			((expanded && (FlagSet(model.foldFlags, FoldFlag::LineAfterExpanded)))
-			||
-			(!expanded && (FlagSet(model.foldFlags, FoldFlag::LineAfterContracted))))) {
+		if (lastSubLine && FlagSet(model.foldFlags, (expanded ? FoldFlag::LineAfterExpanded : FoldFlag::LineAfterContracted))) {
 			surface->FillRectangleAligned(Side(rcLine, Edge::bottom, 1.0), foldLineColour);
 			// If contracted fold line drawn then don't overwrite with hidden line
 			// as fold lines are more specific then hidden lines.

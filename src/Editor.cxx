@@ -92,11 +92,11 @@ constexpr bool CanEliminate(const DocModification &mh) noexcept {
 	in a [possibly lengthy] multi-step Undo/Redo sequence
 */
 constexpr bool IsLastStep(const DocModification &mh) noexcept {
-	return
-		FlagSet(mh.modificationType, (ModificationFlags::Undo | ModificationFlags::Redo))
-		&& FlagSet(mh.modificationType, ModificationFlags::MultiStepUndoRedo)
-		&& FlagSet(mh.modificationType, ModificationFlags::LastStepInUndoRedo)
-		&& FlagSet(mh.modificationType, ModificationFlags::MultilineUndoRedo);
+	constexpr ModificationFlags finalMask = ModificationFlags::MultiStepUndoRedo
+		| ModificationFlags::LastStepInUndoRedo
+		| ModificationFlags::MultilineUndoRedo;
+	return FlagSet(mh.modificationType, (ModificationFlags::Undo | ModificationFlags::Redo))
+		&& ((mh.modificationType & finalMask) == finalMask);
 }
 
 }
@@ -1525,7 +1525,7 @@ bool Editor::WrapBlock(Surface *surface, Sci::Line lineToWrap, Sci::Line lineToW
 		} else {
 			ll->caretPosition = 0;
 		}
-		const uint64_t wrappedBytes = view.LayoutLine(*this, surface, vs, ll, wrapWidth, LayoutLineOption::ManualUpdate);
+		const uint64_t wrappedBytes = view.LayoutLine(*this, surface, vs, ll, wrapWidth, LayoutLineOption::IdleUpdate);
 		wrappedBytesAllThread += wrappedBytes & UINT32_MAX;
 		wrappedBytesOneThread += wrappedBytes >> 32;
 		linesAfterWrap[index] = ll->lines;
@@ -2653,18 +2653,25 @@ void Editor::NotifySavePoint(Document *, void *, bool atSavePoint) noexcept {
 	NotifySavePoint(atSavePoint);
 }
 
-void Editor::CheckModificationForWrap(DocModification mh) {
-	if (FlagSet(mh.modificationType, ModificationFlags::InsertText | ModificationFlags::DeleteText)) {
-		view.llc.Invalidate(LineLayout::ValidLevel::checkTextAndStyle);
-		const Sci::Line lineDoc = pdoc->SciLineFromPosition(mh.position);
-		const Sci::Line lines = std::max<Sci::Line>(0, mh.linesAdded);
-		if (Wrapping()) {
-			NeedWrapping(lineDoc, lineDoc + lines + 1);
+void Editor::CheckModificationForShow(const DocModification &mh) {
+	const Sci::Line lineOfPos = pdoc->SciLineFromPosition(mh.position);
+	Sci::Position endNeedShown = mh.position;
+	if (FlagSet(mh.modificationType, ModificationFlags::BeforeInsert)) {
+		if (pdoc->ContainsLineEnd(mh.text, mh.length) && (mh.position != pdoc->LineStart(lineOfPos)))
+			endNeedShown = pdoc->LineStart(lineOfPos + 1);
+	} else {
+		// If the deletion includes any EOL then we extend the need shown area.
+		endNeedShown = mh.position + mh.length;
+		Sci::Line lineLast = pdoc->SciLineFromPosition(mh.position + mh.length);
+		for (Sci::Line line = lineOfPos + 1; line <= lineLast; line++) {
+			const Sci::Line lineMaxSubord = pdoc->GetLastChild(line);
+			if (lineLast < lineMaxSubord) {
+				lineLast = lineMaxSubord;
+				endNeedShown = pdoc->LineEnd(lineLast);
+			}
 		}
-		RefreshStyleData();
-		// Fix up annotation heights
-		SetAnnotationHeights(lineDoc, lineDoc + lines + 2);
 	}
+	NeedShown(mh.position, endNeedShown - mh.position);
 }
 
 namespace {
@@ -2750,24 +2757,7 @@ void Editor::NotifyModified(Document *, DocModification mh, void *) {
 		}
 		if (FlagSet(mh.modificationType, (ModificationFlags::BeforeInsert | ModificationFlags::BeforeDelete)) && pcs->HiddenLines()) {
 			// Some lines are hidden so may need shown.
-			const Sci::Line lineOfPos = pdoc->SciLineFromPosition(mh.position);
-			Sci::Position endNeedShown = mh.position;
-			if (FlagSet(mh.modificationType, ModificationFlags::BeforeInsert)) {
-				if (pdoc->ContainsLineEnd(mh.text, mh.length) && (mh.position != pdoc->LineStart(lineOfPos)))
-					endNeedShown = pdoc->LineStart(lineOfPos + 1);
-			} else if (FlagSet(mh.modificationType, ModificationFlags::BeforeDelete)) {
-				// If the deletion includes any EOL then we extend the need shown area.
-				endNeedShown = mh.position + mh.length;
-				Sci::Line lineLast = pdoc->SciLineFromPosition(mh.position + mh.length);
-				for (Sci::Line line = lineOfPos + 1; line <= lineLast; line++) {
-					const Sci::Line lineMaxSubord = pdoc->GetLastChild(line);
-					if (lineLast < lineMaxSubord) {
-						lineLast = lineMaxSubord;
-						endNeedShown = pdoc->LineEnd(lineLast);
-					}
-				}
-			}
-			NeedShown(mh.position, endNeedShown - mh.position);
+			CheckModificationForShow(mh);
 		}
 		if (mh.linesAdded != 0) {
 			// Update contraction state for inserted and removed lines
@@ -2796,7 +2786,18 @@ void Editor::NotifyModified(Document *, DocModification mh, void *) {
 				Redraw();
 			}
 		}
-		CheckModificationForWrap(mh);
+		//CheckModificationForWrap(mh);
+		if (FlagSet(mh.modificationType, ModificationFlags::InsertText | ModificationFlags::DeleteText)) {
+			view.llc.Invalidate(LineLayout::ValidLevel::checkTextAndStyle);
+			const Sci::Line lineDoc = pdoc->SciLineFromPosition(mh.position);
+			const Sci::Line lines = std::max<Sci::Line>(0, mh.linesAdded);
+			if (Wrapping()) {
+				NeedWrapping(lineDoc, lineDoc + lines + 1);
+			}
+			RefreshStyleData();
+			// Fix up annotation heights
+			SetAnnotationHeights(lineDoc, lineDoc + lines + 2);
+		}
 		if (mh.linesAdded != 0) {
 			// Avoid scrolling of display if change before current display
 			if (mh.position < posTopLine && !CanDeferToLastStep(mh)) {
@@ -2830,7 +2831,7 @@ void Editor::NotifyModified(Document *, DocModification mh, void *) {
 		SetScrollBars();
 	}
 
-	if ((FlagSet(mh.modificationType, ModificationFlags::ChangeMarker)) || (FlagSet(mh.modificationType, ModificationFlags::ChangeMargin))) {
+	if (FlagSet(mh.modificationType, (ModificationFlags::ChangeMarker | ModificationFlags::ChangeMargin))) {
 		if ((!willRedrawAll) && ((paintState == PaintState::notPainting) || !PaintContainsMargin())) {
 			if (FlagSet(mh.modificationType, ModificationFlags::ChangeFold)) {
 				// Fold changes can affect the drawing of following lines so redraw whole margin
@@ -3013,8 +3014,6 @@ void Editor::NotifyMacroRecord(Message iMessage, uptr_t wParam, sptr_t lParam) n
 // Something has changed that the container should know about
 void Editor::ContainerNeedsUpdate(Update flags) noexcept {
 	needUpdateUI = needUpdateUI | flags;
-	// layout as much as possible inside LayoutLine() to avoid unexpected scrolling
-	SetIdleTaskTime(ActiveLineWrapTime);
 }
 
 /**
@@ -4632,8 +4631,7 @@ void Editor::MouseLeave() {
 }
 
 static constexpr bool AllowVirtualSpace(VirtualSpace virtualSpaceOptions, bool rectangular) noexcept {
-	return (!rectangular && (FlagSet(virtualSpaceOptions, VirtualSpace::UserAccessible)))
-		|| (rectangular && (FlagSet(virtualSpaceOptions, VirtualSpace::RectangularSelection)));
+	return FlagSet(virtualSpaceOptions, (rectangular ? VirtualSpace::RectangularSelection : VirtualSpace::UserAccessible));
 }
 
 void Editor::ButtonDownWithModifiers(Point pt, unsigned int curTime, KeyMod modifiers) {
@@ -5749,9 +5747,10 @@ Sci::Position Editor::GetTag(char *tagValue, int tagNumber) {
 	return length;
 }
 
-Sci::Position Editor::ReplaceTarget(ReplaceType replaceType, std::string_view text) {
+Sci::Position Editor::ReplaceTarget(Message iMessage, uptr_t wParam, sptr_t lParam) {
+	std::string_view text = ViewFromParams(lParam, wParam);
 	const UndoGroup ug(pdoc);
-	if (replaceType == ReplaceType::patterns) {
+	if (iMessage == Message::ReplaceTargetRE) {
 		Sci::Position length = text.length();
 		const char *p = pdoc->SubstituteByPosition(text.data(), &length);
 		if (!p) {
@@ -5760,7 +5759,7 @@ Sci::Position Editor::ReplaceTarget(ReplaceType replaceType, std::string_view te
 		text = std::string_view(p, length);
 	}
 
-	if (replaceType == ReplaceType::minimal) {
+	if (iMessage == Message::ReplaceTargetMinimal) {
 		// Check for prefix and suffix and reduce text and target to match.
 		// This is performed with Range which doesn't support virtual space.
 		Range range(targetRange.start.Position(), targetRange.end.Position());
@@ -6311,16 +6310,10 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		}
 
 	case Message::ReplaceTarget:
-		PLATFORM_ASSERT(lParam);
-		return ReplaceTarget(ReplaceType::basic, ViewFromParams(lParam, wParam));
-
 	case Message::ReplaceTargetRE:
-		PLATFORM_ASSERT(lParam);
-		return ReplaceTarget(ReplaceType::patterns, ViewFromParams(lParam, wParam));
-
 	case Message::ReplaceTargetMinimal:
 		PLATFORM_ASSERT(lParam);
-		return ReplaceTarget(ReplaceType::minimal, ViewFromParams(lParam, wParam));
+		return ReplaceTarget(iMessage, wParam, lParam);
 
 	case Message::SearchInTarget:
 		PLATFORM_ASSERT(lParam);

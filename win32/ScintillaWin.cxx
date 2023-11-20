@@ -1433,7 +1433,7 @@ bool ScintillaWin::HandleLaTeXTabCompletion() {
 
 	targetRange.start.SetPosition(pos);
 	targetRange.end.SetPosition(main);
-	ReplaceTarget(ReplaceType::basic, std::string_view(buffer, len));
+	ReplaceTarget(Message::ReplaceTarget, len, reinterpret_cast<sptr_t>(buffer));
 	// move caret after character
 	SetEmptySelection(pos + len);
 	return true;
@@ -2351,6 +2351,7 @@ sptr_t ScintillaWin::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		case WM_SETREDRAW:
 			::DefWindowProc(MainHWND(), msg, wParam, lParam);
 			if (wParam) {
+				SetIdleTaskTime(IdleLineWrapTime);
 				SetScrollBars();
 				SetVerticalScrollPos();
 				SetHorizontalScrollPos();
