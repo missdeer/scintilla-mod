@@ -20,8 +20,8 @@ env:
   COMPILER_VERSION: 2024.0.0
   TBB_VERSION: 2021.11.0
   VS_VER: vs2022
-  BOOST_URL: https://boostorg.jfrog.io/artifactory/main/release/1.81.0/source/boost_1_81_0.tar.gz
-  BOOST_PKG: boost_1_81_0
+  BOOST_URL: https://boostorg.jfrog.io/artifactory/main/release/1.83.0/source/boost_1_83_0.tar.gz
+  BOOST_PKG: boost_1_83_0
       
 jobs:          
   win64-msvc:
@@ -47,7 +47,7 @@ jobs:
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -G Ninja ..
-          ninja
+          cmake --build . --parallel --verbose
           mkdir lib
           copy *scintilla.lib lib\
           cd ..
@@ -100,7 +100,7 @@ jobs:
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl  -G Ninja ..
-          ninja
+          cmake --build . --parallel --verbose
           mkdir lib
           copy *scintilla.lib lib\
           cd ..
@@ -170,7 +170,7 @@ jobs:
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -G Ninja ..
-          ninja
+          cmake --build . --parallel --verbose
           mkdir lib
           copy *scintilla.lib lib\
           cd ..
@@ -245,7 +245,7 @@ jobs:
           mkdir build
           cd build
           env PATH=$PATH:/${{ matrix.mingw_arch }}/bin cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=${{ matrix.c }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -G Ninja ..
-          env PATH=$PATH:/${{ matrix.mingw_arch }}/bin ninja
+          env PATH=$PATH:/${{ matrix.mingw_arch }}/bin cmake --build . --parallel --verbose
           mkdir lib
           cp libscintilla.a lib/
           cd ..
