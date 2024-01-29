@@ -515,13 +515,11 @@ void ColouriseGroovyDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int init
 			} else if (IsAGraphic(sc.ch)) {
 				sc.SetState(SCE_GROOVY_OPERATOR);
 				if (!nestedState.empty()) {
+					sc.ChangeState(SCE_GROOVY_OPERATOR2);
 					if (sc.ch == '{') {
 						nestedState.push_back(SCE_GROOVY_DEFAULT);
 					} else if (sc.ch == '}') {
 						const int outerState = TakeAndPop(nestedState);
-						if (outerState != SCE_GROOVY_DEFAULT) {
-							sc.ChangeState(SCE_GROOVY_OPERATOR2);
-						}
 						sc.ForwardSetState(outerState);
 						continue;
 					}
@@ -571,24 +569,6 @@ struct FoldLineState {
 	}
 };
 
-constexpr bool IsStreamCommentStyle(int style) noexcept {
-	return style == SCE_GROOVY_COMMENTBLOCK
-		|| style == SCE_GROOVY_COMMENTBLOCKDOC
-		|| style == SCE_GROOVY_COMMENTTAGAT
-		|| style == SCE_GROOVY_COMMENTTAGHTML
-		|| style == SCE_GROOVY_TASKMARKER;
-}
-
-constexpr bool IsMultilineStringStyle(int style) noexcept {
-	return style == SCE_GROOVY_TRIPLE_STRING_SQ
-		|| style == SCE_GROOVY_TRIPLE_STRING_DQ
-		|| style == SCE_GROOVY_SLASHY_STRING
-		|| style == SCE_GROOVY_DOLLAR_SLASHY
-		|| style == SCE_GROOVY_OPERATOR2
-		|| style == SCE_GROOVY_VARIABLE
-		|| style == SCE_GROOVY_ESCAPECHAR;
-}
-
 void FoldGroovyDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, LexerWordList /*keywordLists*/, Accessor &styler) {
 	const Sci_PositionU endPos = startPos + lengthDoc;
 	Sci_Line lineCurrent = styler.GetLine(startPos);
@@ -620,25 +600,20 @@ void FoldGroovyDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle
 		switch (style) {
 		case SCE_GROOVY_COMMENTBLOCK:
 		case SCE_GROOVY_COMMENTBLOCKDOC:
-			if (!IsStreamCommentStyle(stylePrev)) {
-				levelNext++;
-			} else if (!IsStreamCommentStyle(styleNext)) {
-				levelNext--;
-			}
-			break;
-
 		case SCE_GROOVY_TRIPLE_STRING_SQ:
 		case SCE_GROOVY_TRIPLE_STRING_DQ:
 		case SCE_GROOVY_SLASHY_STRING:
 		case SCE_GROOVY_DOLLAR_SLASHY:
-			if (!IsMultilineStringStyle(stylePrev)) {
+			if (style != stylePrev) {
 				levelNext++;
-			} else if (!IsMultilineStringStyle(styleNext)) {
+			}
+			if (style != styleNext) {
 				levelNext--;
 			}
 			break;
 
-		case SCE_GROOVY_OPERATOR: {
+		case SCE_GROOVY_OPERATOR:
+		case SCE_GROOVY_OPERATOR2: {
 			const char ch = styler[startPos - 1];
 			if (ch == '{' || ch == '[' || ch == '(') {
 				levelNext++;
