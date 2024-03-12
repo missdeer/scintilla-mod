@@ -22,6 +22,7 @@ env:
   VS_VER: vs2022
   BOOST_URL: https://boostorg.jfrog.io/artifactory/main/release/1.83.0/source/boost_1_83_0.tar.gz
   BOOST_PKG: boost_1_83_0
+  CLANG_LINK: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.1/LLVM-18.1.1-win64.exe
       
 jobs:          
   win64-msvc:
@@ -81,7 +82,7 @@ jobs:
         run: |
           mkdir llvm
           cd llvm
-          curl.exe -o LLVM.exe -L https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.2/LLVM-16.0.2-win64.exe
+          curl.exe -o LLVM.exe %CLANG_LINK%
           7z.exe x LLVM.exe
           cd ..
       
