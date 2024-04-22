@@ -142,7 +142,9 @@ int SystemMetricsForDpi(int nIndex, UINT dpi) NP2F_noexcept {
 	}
 
 	int value = ::GetSystemMetrics(nIndex);
-	value = (dpi == g_uSystemDPI) ? value : ::MulDiv(value, dpi, g_uSystemDPI);
+	if (dpi != g_uSystemDPI) {
+		value = ::MulDiv(value, dpi, g_uSystemDPI);
+	}
 	return value;
 }
 
@@ -693,7 +695,7 @@ void SurfaceGDI::PenColour(ColourRGBA fore, XYPOSITION widthStroke) noexcept {
 	}
 	const DWORD penWidth = std::lround(widthStroke);
 	const COLORREF penColour = fore.OpaqueRGB();
-	if (widthStroke > 1) {
+	if (penWidth > 1) {
 		const LOGBRUSH brushParameters { BS_SOLID, penColour, 0 };
 		pen = ::ExtCreatePen(PS_GEOMETRIC | PS_ENDCAP_ROUND | PS_JOIN_MITER,
 			penWidth,
@@ -701,7 +703,7 @@ void SurfaceGDI::PenColour(ColourRGBA fore, XYPOSITION widthStroke) noexcept {
 			0,
 			nullptr);
 	} else {
-		pen = ::CreatePen(PS_INSIDEFRAME, penWidth, penColour);
+		pen = ::CreatePen(PS_INSIDEFRAME, 1, penColour);
 	}
 	penOld = SelectPen(hdc, pen);
 }
@@ -878,7 +880,7 @@ public:
 	DIBSection &operator=(DIBSection&&) = delete;
 	~DIBSection() noexcept;
 	operator bool() const noexcept {
-		return hMemDC && hbmMem && pixels;
+		return hbmMem != nullptr;
 	}
 	DWORD *Pixels() const noexcept {
 		return pixels;
@@ -909,27 +911,22 @@ DIBSection::DIBSection(HDC hdc, SIZE size_) noexcept {
 
 	// -size.y makes bitmap start from top
 	const BITMAPINFO bpih = { {sizeof(BITMAPINFOHEADER), size.cx, -size.cy, 1, 32, BI_RGB, 0, 0, 0, 0, 0}, {{0, 0, 0, 0}} };
-	void *image = nullptr;
-	hbmMem = CreateDIBSection(hMemDC, &bpih, DIB_RGB_COLORS, &image, nullptr, 0);
-	if (!hbmMem || !image) {
+	hbmMem = CreateDIBSection(hMemDC, &bpih, DIB_RGB_COLORS, reinterpret_cast<void **>(&pixels), nullptr, 0);
+	if (!hbmMem) {
 		return;
 	}
-	pixels = static_cast<DWORD *>(image);
 	hbmOld = SelectBitmap(hMemDC, hbmMem);
 }
 
 DIBSection::~DIBSection() noexcept {
 	if (hbmOld) {
 		SelectBitmap(hMemDC, hbmOld);
-		hbmOld = {};
 	}
 	if (hbmMem) {
 		::DeleteObject(hbmMem);
-		hbmMem = {};
 	}
 	if (hMemDC) {
 		::DeleteDC(hMemDC);
-		hMemDC = {};
 	}
 }
 
@@ -2873,6 +2870,7 @@ void Window::InvalidateRectangle(PRectangle rc) noexcept {
 	::InvalidateRect(HwndFromWindowID(wid), &rcw, FALSE);
 }
 
+#if 1 // flip system array cursor
 namespace {
 
 void FlipBitmap(HBITMAP bitmap, int width, int height) noexcept {
@@ -2887,41 +2885,101 @@ void FlipBitmap(HBITMAP bitmap, int width, int height) noexcept {
 
 }
 
-HCURSOR LoadReverseArrowCursor(UINT dpi, int cursorBaseSize) noexcept {
-	HCURSOR reverseArrowCursor {};
-
+HCURSOR LoadReverseArrowCursor(HCURSOR cursor, UINT dpi) noexcept {
 	bool created = false;
-	HCURSOR cursor = ::LoadCursor({}, IDC_ARROW);
+	// https://learn.microsoft.com/en-us/answers/questions/815036/windows-cursor-size
+	constexpr DWORD defaultCursorBaseSize = 32;
+	constexpr DWORD maxCursorBaseSize = 16*(1 + 15); // 16*(1 + CursorSize)
+	DWORD cursorBaseSize = 0;
+	HKEY hKey {};
+	LSTATUS status = ::RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Cursors", 0, KEY_READ, &hKey);
+	if (status == ERROR_SUCCESS) {
+		DWORD baseSize = 0;
+		DWORD type = REG_DWORD;
+		DWORD size = sizeof(DWORD);
+		status = ::RegQueryValueExW(hKey, L"CursorBaseSize", nullptr, &type, reinterpret_cast<LPBYTE>(&baseSize), &size);
+		if (status == ERROR_SUCCESS && type == REG_DWORD) {
+			// CursorBaseSize is multiple of 16
+			cursorBaseSize = std::min(baseSize & ~15, maxCursorBaseSize);
+		}
+	}
 
-	if (dpi != g_uSystemDPI || cursorBaseSize > 32) {
-		int width = SystemMetricsForDpi(SM_CXCURSOR, dpi);
-		int height = SystemMetricsForDpi(SM_CYCURSOR, dpi);
-		if (cursorBaseSize > width || cursorBaseSize > height) {
-			width = MulDiv(cursorBaseSize, dpi, g_uSystemDPI);
+	if (dpi != g_uSystemDPI || cursorBaseSize > defaultCursorBaseSize) {
+		int width;
+		int height;
+		if (cursorBaseSize > defaultCursorBaseSize) {
+			width = ::MulDiv(cursorBaseSize, dpi, USER_DEFAULT_SCREEN_DPI);
 			height = width;
+		} else {
+			width = SystemMetricsForDpi(SM_CXCURSOR, dpi);
+			height = SystemMetricsForDpi(SM_CYCURSOR, dpi);
+		}
+		if (hKey) {
+			// workaround CopyImage() for system cursor
+			// https://learn.microsoft.com/en-us/answers/questions/1315176/how-to-copy-system-cursors-properly
+			WCHAR cursorPath[MAX_PATH]{};
+			DWORD size = sizeof(cursorPath);
+			DWORD type = REG_SZ;
+#if _WIN32_WINNT >= _WIN32_WINNT_VISTA
+			status = ::RegGetValueW(hKey, nullptr, L"Arrow", RRF_RT_REG_SZ, &type, cursorPath, &size);
+			if (status == ERROR_SUCCESS && type == REG_SZ) {
+				HCURSOR load = static_cast<HCURSOR>(::LoadImage({}, cursorPath, IMAGE_CURSOR, width, height, LR_LOADFROMFILE));
+				if (load) {
+					created = true;
+					cursor = load;
+				}
+			}
+#else
+			status = ::RegQueryValueExW(hKey, L"Arrow", nullptr, &type, reinterpret_cast<LPBYTE>(cursorPath), &size);
+			if (status == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+				LPCWSTR path = cursorPath;
+				WCHAR expansion[MAX_PATH];
+				if (type == REG_EXPAND_SZ) {
+					size = ::ExpandEnvironmentStringsW(cursorPath, expansion, MAX_PATH);
+					if (size > 0 && size <= MAX_PATH) {
+						path = expansion;
+					}
+				}
+				HCURSOR load = static_cast<HCURSOR>(::LoadImage({}, path, IMAGE_CURSOR, width, height, LR_LOADFROMFILE));
+				if (load) {
+					created = true;
+					cursor = load;
+				}
+			}
+#endif // _WIN32_WINNT_VISTA
 		}
 		HCURSOR copy = static_cast<HCURSOR>(::CopyImage(cursor, IMAGE_CURSOR, width, height, LR_COPYFROMRESOURCE | LR_COPYRETURNORG));
-		if (copy) {
-			created = copy != cursor;
+		if (copy && copy != cursor) {
+			if (created) {
+				::DestroyCursor(cursor);
+			}
+			created = true;
 			cursor = copy;
 		}
 	}
 
+	if (hKey) {
+		::RegCloseKey(hKey);
+	}
+
 	ICONINFO info;
+	HCURSOR reverseArrowCursor {};
 	if (::GetIconInfo(cursor, &info)) {
 		BITMAP bmp{};
 		if (::GetObject(info.hbmMask, sizeof(bmp), &bmp)) {
 			FlipBitmap(info.hbmMask, bmp.bmWidth, bmp.bmHeight);
-			if (info.hbmColor)
+			if (info.hbmColor) {
 				FlipBitmap(info.hbmColor, bmp.bmWidth, bmp.bmHeight);
+			}
 			info.xHotspot = bmp.bmWidth - 1 - info.xHotspot;
 
 			reverseArrowCursor = ::CreateIconIndirect(&info);
 		}
 
 		::DeleteObject(info.hbmMask);
-		if (info.hbmColor)
+		if (info.hbmColor) {
 			::DeleteObject(info.hbmColor);
+		}
 	}
 
 	if (created) {
@@ -2929,6 +2987,158 @@ HCURSOR LoadReverseArrowCursor(UINT dpi, int cursorBaseSize) noexcept {
 	}
 	return reverseArrowCursor;
 }
+
+#else // draw reverse arrow cursor
+namespace {
+
+std::optional<DWORD> RegGetDWORD(HKEY hKey, LPCWSTR key) noexcept {
+	DWORD value = 0;
+	DWORD type = REG_DWORD;
+	DWORD size = sizeof(DWORD);
+	const LSTATUS status = ::RegQueryValueExW(hKey, key, nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size);
+	if (status == ERROR_SUCCESS && type == REG_DWORD) {
+		return value;
+	}
+	return {};
+}
+
+}
+
+HCURSOR LoadReverseArrowCursor(HCURSOR cursor, UINT dpi) noexcept {
+	// https://learn.microsoft.com/en-us/answers/questions/815036/windows-cursor-size
+	constexpr DWORD defaultCursorBaseSize = 32;
+	constexpr DWORD maxCursorBaseSize = 16*(1 + 15); // 16*(1 + CursorSize)
+	DWORD cursorBaseSize = 0;
+	HKEY hKey {};
+	LSTATUS status = ::RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Cursors", 0, KEY_READ, &hKey);
+	if (status == ERROR_SUCCESS) {
+		if (auto baseSize = RegGetDWORD(hKey, L"CursorBaseSize")) {
+			// CursorBaseSize is multiple of 16
+			cursorBaseSize = std::min(*baseSize & ~15, maxCursorBaseSize);
+		}
+		::RegCloseKey(hKey);
+	}
+
+	int width;
+	int height;
+	if (cursorBaseSize > defaultCursorBaseSize) {
+		width = ::MulDiv(cursorBaseSize, dpi, USER_DEFAULT_SCREEN_DPI);
+		height = width;
+	} else {
+		width = SystemMetricsForDpi(SM_CXCURSOR, dpi);
+		height = SystemMetricsForDpi(SM_CYCURSOR, dpi);
+		PLATFORM_ASSERT(width == height);
+	}
+
+	HDC hMemDC = ::CreateCompatibleDC({});
+	if (!hMemDC) {
+		return {};
+	}
+
+	// https://learn.microsoft.com/en-us/windows/win32/menurc/using-cursors#creating-a-cursor
+	BITMAPV5HEADER bi {};
+	bi.bV5Size = sizeof(BITMAPV5HEADER);
+	bi.bV5Width = width;
+	bi.bV5Height = height;
+	bi.bV5Planes = 1;
+	bi.bV5BitCount = 32;
+	bi.bV5Compression = BI_BITFIELDS;
+	// The following mask specification specifies a supported 32 BPP alpha format for Windows XP.
+	bi.bV5RedMask   = 0x00FF0000U;
+	bi.bV5GreenMask = 0x0000FF00U;
+	bi.bV5BlueMask  = 0x000000FFU;
+	bi.bV5AlphaMask = 0xFF000000U;
+
+	// Create the DIB section with an alpha channel.
+	DWORD *pixels = nullptr;
+	HBITMAP hBitmap = CreateDIBSection(hMemDC, reinterpret_cast<BITMAPINFO *>(&bi), DIB_RGB_COLORS, reinterpret_cast<void **>(&pixels), nullptr, 0);
+	if (!hBitmap) {
+		::DeleteDC(hMemDC);
+		return {};
+	}
+
+	// Draw something on the DIB section.
+	HBITMAP hOldBitmap = SelectBitmap(hMemDC, hBitmap);
+	const double scale = width/32.0;
+	// polygon colour and coordinates from C:\Windows\Cursors\arrow.svg
+	COLORREF fillColour = RGB(0xff, 0xff, 0xfe);
+	COLORREF strokeColour = RGB(0, 0, 1);
+	static constexpr double arrow[] = {
+		32 - 12.73606,32 - 19.04075,
+		32 - 7.80159, 32 - 19.04075,
+		32 - 9.82813, 32 - 14.91828,
+		32 - 6.88341, 32 - 13.42515,
+		32 - 4.62301, 32 - 18.05872,
+		32 - 1.26394, 32 - 14.78295,
+		32 - 1.26394, 32 - 30.57485,
+	};
+
+	status = ::RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Accessibility", 0, KEY_READ, &hKey);
+	if (status == ERROR_SUCCESS) {
+		if (auto cursorType = RegGetDWORD(hKey, L"CursorType")) {
+			switch (*cursorType) {
+			case 1: // black
+				std::swap(fillColour, strokeColour);
+				break;
+			case 6: // custom
+				if (auto cursorColor = RegGetDWORD(hKey, L"CursorColor")) {
+					fillColour = *cursorColor;
+				}
+				break;
+			default: // 0 white, 2 invert
+				break;
+			}
+		}
+		::RegCloseKey(hKey);
+	}
+
+	POINT points[std::size(arrow)/2];
+	for (size_t i = 0, index = 0; i < std::size(arrow); i += 2, index++) {
+		points[index].x = std::lround(arrow[i] * scale);
+		points[index].y = std::lround(arrow[i + 1] * scale);
+	}
+
+	const DWORD penWidth = std::lround(scale);
+	HPEN pen;
+	if (penWidth > 1) {
+		const LOGBRUSH brushParameters { BS_SOLID, strokeColour, 0 };
+		pen = ::ExtCreatePen(PS_GEOMETRIC | PS_ENDCAP_ROUND | PS_JOIN_MITER,
+			penWidth,
+			&brushParameters,
+			0,
+			nullptr);
+	} else {
+		pen = ::CreatePen(PS_INSIDEFRAME, 1, strokeColour);
+	}
+
+	HPEN penOld = SelectPen(hMemDC, pen);
+	HBRUSH brush = ::CreateSolidBrush(fillColour);
+	HBRUSH brushOld = SelectBrush(hMemDC, brush);
+	::Polygon(hMemDC, points, static_cast<int>(std::size(points)));
+	SelectPen(hMemDC, penOld);
+	SelectBrush(hMemDC, brushOld);
+	SelectBitmap(hMemDC, hOldBitmap);
+	::DeleteObject(pen);
+	::DeleteObject(brush);
+	::DeleteDC(hMemDC);
+
+	// Set the alpha values for each pixel in the cursor.
+	for (int i = 0; i < width*height; i++) {
+		if (*pixels != 0) {
+			*pixels |= 0xFF000000U;
+		}
+		pixels++;
+	}
+
+	// Create an empty mask bitmap.
+	HBITMAP hMonoBitmap = ::CreateBitmap(width, height, 1, 1, nullptr);
+	ICONINFO info = {false, static_cast<DWORD>(width - 1), 0, hMonoBitmap, hBitmap};
+	cursor = ::CreateIconIndirect(&info);
+	::DeleteObject(hMonoBitmap);
+	::DeleteObject(hBitmap);
+	return cursor;
+}
+#endif // reverse arrow cursor
 
 void Window::SetCursor(Cursor curs) noexcept {
 	switch (curs) {
@@ -2953,6 +3163,7 @@ void Window::SetCursor(Cursor curs) noexcept {
 	case Cursor::reverseArrow:
 	case Cursor::arrow:
 	case Cursor::invalid:	// Should not occur, but just in case.
+	default:
 		::SetCursor(::LoadCursor({}, IDC_ARROW));
 		break;
 	}
@@ -3081,7 +3292,6 @@ public:
 	~ListBoxX() noexcept override {
 		if (fontCopy) {
 			::DeleteObject(fontCopy);
-			fontCopy = nullptr;
 		}
 	}
 	void SetFont(const Font *font) noexcept override;
