@@ -1365,7 +1365,7 @@ static_assert(sizeof(D2D1_RECT_F) == sizeof(__m128));
 
 inline D2D1_RECT_F RectangleFromPRectangleEx(PRectangle prc) noexcept {
 	D2D1_RECT_F rc;
-	const __m256d f64x4 = _mm256_load_pd((double *)(&prc));
+	const __m256d f64x4 = _mm256_load_pd(reinterpret_cast<double *>(&prc));
 	const __m128 f32x4 = _mm256_cvtpd_ps(f64x4);
 	_mm_storeu_ps((float *)(&rc), f32x4);
 	return rc;
@@ -1387,9 +1387,9 @@ static_assert(sizeof(D2D1_POINT_2F) == sizeof(__m64));
 
 inline D2D1_POINT_2F DPointFromPointEx(Point point) noexcept {
 	D2D1_POINT_2F pt;
-	const __m128d f64x2 = _mm_load_pd((double *)(&point));
+	const __m128d f64x2 = _mm_load_pd(reinterpret_cast<double *>(&point));
 	const __m128 f32x2 = _mm_cvtpd_ps(f64x2);
-	_mm_storel_pi((__m64 *)(&pt), f32x2);
+	_mm_storel_pi(reinterpret_cast<__m64 *>(&pt), f32x2);
 	return pt;
 }
 
@@ -1418,7 +1418,7 @@ inline D2D_COLOR_F ColorFromColourAlpha(ColourRGBA colour) noexcept {
 	__m128 f32x4 = _mm_cvtepi32_ps(i32x4);
 	f32x4 = _mm_div_ps(f32x4, _mm_set1_ps(255.0f));
 	D2D_COLOR_F color;
-	_mm_storeu_ps((float *)&color, f32x4);
+	_mm_storeu_ps(reinterpret_cast<float *>(&color), f32x4);
 	return color;
 }
 
@@ -4042,7 +4042,7 @@ void ListBoxX::Paint(HDC hDC) noexcept {
 	const RECT rc = { 0, 0, extent.x, extent.y };
 	FillRectColour(bitmapDC, &rc, colorBackground);
 	// Paint the entire client area and vertical scrollbar
-	::SendMessage(lb, WM_PRINT, reinterpret_cast<WPARAM>(bitmapDC), PRF_CLIENT | PRF_NONCLIENT);
+	::SendMessage(lb, WM_PRINT, AsInteger<WPARAM>(bitmapDC), PRF_CLIENT | PRF_NONCLIENT);
 	::BitBlt(hDC, 0, 0, extent.x, extent.y, bitmapDC, 0, 0, SRCCOPY);
 	// Select a stock brush to prevent warnings from BoundsChecker
 	SelectBrush(bitmapDC, GetStockBrush(WHITE_BRUSH));
@@ -4053,7 +4053,7 @@ void ListBoxX::Paint(HDC hDC) noexcept {
 
 LRESULT CALLBACK ListBoxX::ControlWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR /*dwRefData*/) {
 	try {
-		ListBoxX *lbx = static_cast<ListBoxX *>(PointerFromWindow(::GetParent(hWnd)));
+		ListBoxX *lbx = PointerFromWindow<ListBoxX *>(::GetParent(hWnd));
 		switch (iMessage) {
 		case WM_ERASEBKGND:
 			return TRUE;
@@ -4119,7 +4119,7 @@ LRESULT ListBoxX::WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam
 			WS_CHILD | WS_VSCROLL | WS_VISIBLE |
 			LBS_OWNERDRAWFIXED | LBS_NODATA | LBS_NOINTEGRALHEIGHT,
 			0, 0, 150, 80, hWnd,
-			reinterpret_cast<HMENU>(static_cast<ptrdiff_t>(ctrlID)),
+			AsPointer<HMENU>(static_cast<ptrdiff_t>(ctrlID)),
 			hinstanceParent,
 			nullptr);
 		::SetWindowSubclass(lb, ControlWndProc, 0, 0);
@@ -4150,13 +4150,13 @@ LRESULT ListBoxX::WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam
 		break;
 
 	case WM_MEASUREITEM: {
-		MEASUREITEMSTRUCT *pMeasureItem = reinterpret_cast<MEASUREITEMSTRUCT *>(lParam);
+		MEASUREITEMSTRUCT *pMeasureItem = AsPointer<MEASUREITEMSTRUCT *>(lParam);
 		pMeasureItem->itemHeight = ItemHeight();
 	}
 	break;
 
 	case WM_DRAWITEM:
-		Draw(reinterpret_cast<DRAWITEMSTRUCT *>(lParam));
+		Draw(AsPointer<DRAWITEMSTRUCT *>(lParam));
 		break;
 
 	case WM_DESTROY:
@@ -4170,7 +4170,7 @@ LRESULT ListBoxX::WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam
 		return TRUE;
 
 	case WM_GETMINMAXINFO: {
-		MINMAXINFO *minMax = reinterpret_cast<MINMAXINFO*>(lParam);
+		MINMAXINFO *minMax = AsPointer<MINMAXINFO*>(lParam);
 		minMax->ptMaxTrackSize = MaxTrackSize();
 		minMax->ptMinTrackSize = MinTrackSize();
 	}
@@ -4222,7 +4222,7 @@ LRESULT ListBoxX::WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam
 	}
 
 	case WM_NCCALCSIZE: {
-		LPRECT rect = reinterpret_cast<LPRECT>(lParam);
+		LPRECT rect = AsPointer<LPRECT>(lParam);
 		::InflateRect(rect, -ListBoxXFakeFrameSize, -ListBoxXFakeFrameSize);
 		return 0;
 	}
@@ -4276,11 +4276,11 @@ LRESULT ListBoxX::WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam
 
 LRESULT CALLBACK ListBoxX::StaticWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
 	if (iMessage == WM_CREATE) {
-		CREATESTRUCT *pCreate = reinterpret_cast<CREATESTRUCT *>(lParam);
+		CREATESTRUCT *pCreate = AsPointer<CREATESTRUCT *>(lParam);
 		SetWindowPointer(hWnd, pCreate->lpCreateParams);
 	}
 	// Find C++ object associated with window.
-	ListBoxX *lbx = static_cast<ListBoxX *>(PointerFromWindow(hWnd));
+	ListBoxX *lbx = PointerFromWindow<ListBoxX *>(hWnd);
 	if (lbx) {
 		return lbx->WndProc(hWnd, iMessage, wParam, lParam);
 	} else {

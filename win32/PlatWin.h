@@ -127,7 +127,7 @@ static_assert(sizeof(POINT) == sizeof(__int64));
 
 inline POINT POINTFromPointEx(Point point) noexcept {
 	POINT pt;
-	const __m128d f64x2 = _mm_load_pd((double *)(&point));
+	const __m128d f64x2 = _mm_load_pd(reinterpret_cast<double *>(&point));
 	const __m128i i32x2 = _mm_cvttpd_epi32(f64x2);
 	_mm_storeu_si64(&pt, i32x2);
 	return pt;
@@ -137,7 +137,7 @@ inline Point PointFromPOINTEx(POINT point) noexcept {
 	Point pt;
 	const __m128i i32x2 = _mm_loadu_si64(&point);
 	const __m128d f64x2 = _mm_cvtepi32_pd(i32x2);
-	_mm_storeu_pd((double *)(&pt), f64x2);
+	_mm_storeu_pd(reinterpret_cast<double *>(&pt), f64x2);
 	return pt;
 }
 
@@ -159,12 +159,13 @@ inline HWND HwndFromWindow(const Window &w) noexcept {
 	return HwndFromWindowID(w.GetID());
 }
 
-inline void *PointerFromWindow(HWND hWnd) noexcept {
-	return reinterpret_cast<void *>(::GetWindowLongPtr(hWnd, 0));
+template <class T>
+inline T PointerFromWindow(HWND hWnd) noexcept {
+	return AsPointer<T>(::GetWindowLongPtr(hWnd, 0));
 }
 
 inline void SetWindowPointer(HWND hWnd, void *ptr) noexcept {
-	::SetWindowLongPtr(hWnd, 0, reinterpret_cast<LONG_PTR>(ptr));
+	::SetWindowLongPtr(hWnd, 0, AsInteger<LONG_PTR>(ptr));
 }
 
 inline UINT DpiForWindow(WindowID wid) noexcept {
