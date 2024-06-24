@@ -939,7 +939,7 @@ inline DWORD Proportional(ColourRGBA a, ColourRGBA b, XYPOSITION t) noexcept {
 	const __m128i i32x4Back = rgba_to_abgr_epi32_sse4_si32(b.AsInteger());
 	// a + t * (b - a)
 	__m128 f32x4Fore = _mm_cvtepi32_ps(_mm_sub_epi32(i32x4Back, i32x4Fore));
-	f32x4Fore = _mm_mul_ps(f32x4Fore, _mm_set1_ps((float)t));
+	f32x4Fore = _mm_mul_ps(f32x4Fore, _mm_set1_ps(static_cast<float>(t)));
 	f32x4Fore = _mm_add_ps(f32x4Fore, _mm_cvtepi32_ps(i32x4Fore));
 	// component * alpha / 255
 	const __m128 f32x4Alpha = _mm_broadcastss_ps(f32x4Fore);
@@ -957,7 +957,7 @@ inline DWORD Proportional(ColourRGBA a, ColourRGBA b, XYPOSITION t) noexcept {
 	const __m128i i32x4Back = rgba_to_abgr_epi32_sse2_si32(b.AsInteger());
 	// a + t * (b - a)
 	__m128 f32x4Fore = _mm_cvtepi32_ps(_mm_sub_epi32(i32x4Back, i32x4Fore));
-	f32x4Fore = _mm_mul_ps(f32x4Fore, _mm_set1_ps((float)t));
+	f32x4Fore = _mm_mul_ps(f32x4Fore, _mm_set1_ps(static_cast<float>(t)));
 	f32x4Fore = _mm_add_ps(f32x4Fore, _mm_cvtepi32_ps(i32x4Fore));
 	// component * alpha / 255
 	const uint32_t alpha = _mm_cvttss_si32(f32x4Fore);
@@ -1367,7 +1367,7 @@ inline D2D1_RECT_F RectangleFromPRectangleEx(PRectangle prc) noexcept {
 	D2D1_RECT_F rc;
 	const __m256d f64x4 = _mm256_load_pd(reinterpret_cast<double *>(&prc));
 	const __m128 f32x4 = _mm256_cvtpd_ps(f64x4);
-	_mm_storeu_ps((float *)(&rc), f32x4);
+	_mm_storeu_ps(reinterpret_cast<float *>(&rc), f32x4);
 	return rc;
 }
 
@@ -3397,15 +3397,15 @@ class ListBoxX final : public ListBox {
 	int MinClientWidth() const noexcept;
 	int TextOffset() const noexcept;
 	POINT GetClientExtent() const noexcept;
-	POINT MinTrackSize() const;
-	POINT MaxTrackSize() const;
+	POINT MinTrackSize() const noexcept;
+	POINT MaxTrackSize() const noexcept;
 	void SetRedraw(bool on) noexcept;
 	void OnDoubleClick();
 	void OnSelChange();
 	void ResizeToCursor();
 	void StartResize(WPARAM) noexcept;
 	LRESULT NcHitTest(WPARAM, LPARAM) const noexcept;
-	void CentreItem(int n);
+	void CentreItem(int n) noexcept;
 	void Paint(HDC) noexcept;
 	static LRESULT CALLBACK ControlWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 
@@ -3808,14 +3808,14 @@ int ListBoxX::MinClientWidth() const noexcept {
 	return 12 * (aveCharWidth + aveCharWidth / 3);
 }
 
-POINT ListBoxX::MinTrackSize() const {
+POINT ListBoxX::MinTrackSize() const noexcept {
 	PRectangle rc = PRectangle::FromInts(0, 0, MinClientWidth(), ItemHeight());
 	AdjustWindowRect(&rc);
 	POINT ret = { static_cast<LONG>(rc.Width()), static_cast<LONG>(rc.Height()) };
 	return ret;
 }
 
-POINT ListBoxX::MaxTrackSize() const {
+POINT ListBoxX::MaxTrackSize() const noexcept {
 	const int width = maxCharWidth * maxItemCharacters + static_cast<int>(TextInset.x) * 2 +
 		TextOffset() + SystemMetricsForDpi(SM_CXVSCROLL, dpi);
 	PRectangle rc = PRectangle::FromInts(0, 0,
@@ -4016,7 +4016,7 @@ POINT ListBoxX::GetClientExtent() const noexcept {
 	return ret;
 }
 
-void ListBoxX::CentreItem(int n) {
+void ListBoxX::CentreItem(int n) noexcept {
 	// If below mid point, scroll up to centre, but with more items below if uneven
 	if (n >= 0) {
 		const POINT extent = GetClientExtent();
