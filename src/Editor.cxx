@@ -1966,6 +1966,7 @@ void Editor::InsertCharacter(std::string_view sv, CharacterSource charSource) {
 		if (charSource == CharacterSource::DirectInput && sv.length() == 1 && !sel.Empty() && !sel.IsRectangular()) {
 			const uint8_t ch = sv[0];
 			uint32_t index = ch - '\"';
+			// see GenerateAutoInsertMask() in tools/GenerateTable.py
 			if (index == '{' - '\"' || (index < 63 && (UINT64_C(0x4200000000000061) & (UINT64_C(1) << index)))) {
 				index = (index + (index >> 5)) & 7;
 				index = (0x60501204U >> (4*index)) & 15;
@@ -4344,11 +4345,13 @@ void Editor::CopySelectionRange(SelectionText &ss, bool allowLineCopy) const {
 	} else {
 		std::string text;
 		std::vector<SelectionRange> rangesInOrder = sel.RangesCopy();
-		if (sel.selType == Selection::SelTypes::rectangle)
+		const bool separate = sel.selType == Selection::SelTypes::rectangle || rangesInOrder.size() > 1;
+		if (separate) {
 			std::sort(rangesInOrder.begin(), rangesInOrder.end());
+		}
 		for (const SelectionRange &current : rangesInOrder) {
 			text.append(RangeText(current.Start().Position(), current.End().Position()));
-			if (sel.selType == Selection::SelTypes::rectangle) {
+			if (separate) {
 				if (pdoc->eolMode != EndOfLine::Lf)
 					text.push_back('\r');
 				if (pdoc->eolMode != EndOfLine::Cr)
@@ -5161,7 +5164,12 @@ void Editor::TickFor(TickReason reason) {
 		break;
 	case TickReason::scroll:
 		// Auto scroll
-		ButtonMoveWithModifiers(ptMouseLast, 0, KeyMod::Norm);
+		if (HaveMouseCapture()) {
+			ButtonMoveWithModifiers(ptMouseLast, 0, KeyMod::Norm);
+		} else {
+			// Capture cancelled so cancel timer
+			FineTickerCancel(TickReason::scroll);
+		}
 		break;
 	case TickReason::widen:
 		SetScrollBars();
