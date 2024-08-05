@@ -275,10 +275,11 @@ enum class FindOption {
 	WholeWord = 0x2,
 	MatchCase = 0x4,
 	MatchToWordEnd = 0x8,
-	WordStart = 0x00100000,
-	RegExp = 0x00200000,
-	Posix = 0x00400000,
-	Cxx11RegEx = 0x00800000,
+	WordStart = 0x10,
+	RegExp = 0x20,
+	Posix = 0x40,
+	Cxx11RegEx = 0x80,
+	RegexDotAll = 0x100,
 };
 
 enum class ChangeHistoryOption {
@@ -289,8 +290,10 @@ enum class ChangeHistoryOption {
 };
 
 enum class NotificationPosition {
-	Bottomright = 0,
-	Center = 1,
+	None = 0,
+	Default = 1,
+	BottomRight = 2,
+	Center = 3,
 };
 
 enum class FoldLevel {
