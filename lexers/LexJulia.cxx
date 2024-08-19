@@ -169,7 +169,11 @@ constexpr int GetStringQuote(int state) noexcept {
 }
 
 constexpr bool IsTripleQuotedString(int state) noexcept {
-	return (state & 1) == 0;
+	if constexpr (SCE_JULIA_TRIPLE_STRING & 1) {
+		return state & true;
+	} else {
+		return (state & 1) == 0;
+	}
 }
 
 void ColouriseJuliaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, LexerWordList keywordLists, Accessor &styler) {
@@ -424,45 +428,28 @@ void ColouriseJuliaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 						lineStateLineComment = SimpleLineStateMaskLineComment;
 					}
 				}
-			} else if (sc.ch == '\"') {
+			} else if (sc.ch == '\"' || sc.ch == '`') {
 				insideUrl = false;
-				if (sc.MatchNext('"', '"')) {
-					sc.SetState(SCE_JULIA_TRIPLE_STRING);
+				sc.SetState((sc.ch == '\"') ? SCE_JULIA_STRING : SCE_JULIA_BACKTICKS);
+				if (sc.MatchNext()) {
+					static_assert(SCE_JULIA_TRIPLE_STRING - SCE_JULIA_STRING == SCE_JULIA_TRIPLE_BACKTICKS - SCE_JULIA_BACKTICKS);
+					sc.ChangeState(sc.state + SCE_JULIA_TRIPLE_STRING - SCE_JULIA_STRING);
 					sc.Advance(2);
-				} else {
-					sc.SetState(SCE_JULIA_STRING);
 				}
 			} else if (sc.ch == '\'') {
 				sc.SetState(SCE_JULIA_CHARACTER);
-			} else if (sc.ch == '`') {
-				if (sc.MatchNext('`', '`')) {
-					sc.SetState(SCE_JULIA_TRIPLE_BACKTICKS);
-					sc.Advance(2);
-				} else {
-					sc.SetState(SCE_JULIA_BACKTICKS);
-				}
-			} else if (sc.Match('r', '\"')) {
-				sc.SetState(SCE_JULIA_REGEX);
-				sc.Forward();
-				if (sc.MatchNext('"', '"')) {
-					sc.ChangeState(SCE_JULIA_TRIPLE_REGEX);
-					sc.Advance(2);
-				}
-			} else if (sc.Match('b', '\"')) {
+			} else if (sc.chNext == '\"' && AnyOf<'b', 'r'>(sc.ch)) {
 				insideUrl = false;
-				sc.SetState(SCE_JULIA_BYTESTRING);
+				sc.SetState((sc.ch == 'b') ? SCE_JULIA_BYTESTRING : SCE_JULIA_REGEX);
 				sc.Forward();
 				if (sc.MatchNext('"', '"')) {
-					sc.ChangeState(SCE_JULIA_TRIPLE_BYTESTRING);
+					static_assert(SCE_JULIA_TRIPLE_REGEX - SCE_JULIA_REGEX == SCE_JULIA_TRIPLE_BYTESTRING - SCE_JULIA_BYTESTRING);
+					sc.ChangeState(sc.state + SCE_JULIA_TRIPLE_REGEX - SCE_JULIA_REGEX);
 					sc.Advance(2);
 				}
-			} else if (sc.ch == '@' && IsIdentifierStartEx(sc.chNext)) {
-				sc.SetState(SCE_JULIA_MACRO);
-			} else if (symbol && IsIdentifierStartEx(sc.chNext)) {
-				sc.SetState(SCE_JULIA_SYMBOL);
-			} else if (sc.ch == '$' && IsIdentifierStartEx(sc.chNext)) {
-				isTransposeOperator = true;
-				sc.SetState(SCE_JULIA_VARIABLE);
+			} else if ((symbol || sc.ch == '@' || sc.ch == '$') && IsIdentifierStartEx(sc.chNext)) {
+				isTransposeOperator = sc.ch == '$';
+				sc.SetState(isTransposeOperator ? SCE_JULIA_VARIABLE : (symbol ? SCE_JULIA_SYMBOL : SCE_JULIA_MACRO));
 			} else if (sc.ch == '0') {
 				numBase = 10;
 				isTransposeOperator = true;
@@ -651,4 +638,4 @@ void FoldJuliaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle,
 
 }
 
-LexerModule lmJulia(SCLEX_JULIA, ColouriseJuliaDoc, "julia", FoldJuliaDoc);
+extern const LexerModule lmJulia(SCLEX_JULIA, ColouriseJuliaDoc, "julia", FoldJuliaDoc);

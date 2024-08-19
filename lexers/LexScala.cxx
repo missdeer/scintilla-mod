@@ -68,7 +68,7 @@ constexpr bool IsScalaIdentifierStart(int ch) noexcept {
 }
 
 constexpr bool IsScalaIdentifierChar(int ch) noexcept {
-	return IsIdentifierCharEx(ch) || ch == '$';
+	return IsIdentifierCharEx(ch);
 }
 
 constexpr bool IsSingleLineString(int state) noexcept {
@@ -270,8 +270,8 @@ void ColouriseScalaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 		case SCE_SCALA_XML_STRING_SQ:
 		case SCE_SCALA_XML_STRING_DQ:
 		case SCE_SCALA_STRING:
-		case SCE_SCALA_TRIPLE_STRING:
 		case SCE_SCALA_INTERPOLATED_STRING:
+		case SCE_SCALA_TRIPLE_STRING:
 		case SCE_SCALA_TRIPLE_INTERPOLATED_STRING:
 			if (sc.atLineStart && IsSingleLineString(sc.state)) {
 				sc.SetState(SCE_SCALA_DEFAULT);
@@ -284,22 +284,26 @@ void ColouriseScalaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 					}
 				}
 			} else if (sc.ch == '$' && IsInterpolatedString(sc.state)) {
-				if (sc.chNext == '$') {
-					escSeq.outerState = sc.state;
+				escSeq.outerState = sc.state;
+				sc.SetState(SCE_SCALA_OPERATOR2);
+				sc.Forward();
+				if (sc.ch == '$' || sc.ch == '\"') {
 					escSeq.digitsLeft = 1;
-					sc.SetState(SCE_SCALA_ESCAPECHAR);
-					sc.Forward();
-				} else if (sc.chNext == '{') {
-					nestedState.push_back(sc.state);
-					sc.SetState(SCE_SCALA_OPERATOR2);
-					sc.Forward();
+					sc.ChangeState(SCE_SCALA_ESCAPECHAR);
+				} else if (sc.ch == '{') {
+					nestedState.push_back(escSeq.outerState);
 				} else if (IsScalaIdentifierStart(sc.chNext)) {
-					escSeq.outerState = sc.state;
 					sc.SetState(SCE_SCALA_IDENTIFIER);
+				} else { // error
+					sc.SetState(escSeq.outerState);
+					continue;
 				}
 			} else if (sc.ch == GetStringQuote(sc.state) && (IsSingleLineString(sc.state) || sc.MatchNext('"', '"'))) {
 				if (!IsSingleLineString(sc.state)) {
-					sc.Advance(2);
+					// quotes except last three are string content
+					while (sc.chNext == '\"') {
+						sc.Forward();
+					}
 				}
 				sc.ForwardSetState((sc.state == SCE_SCALA_XML_STRING_SQ || sc.state == SCE_SCALA_XML_STRING_DQ) ? SCE_SCALA_XML_OTHER : SCE_SCALA_DEFAULT);
 				continue;
@@ -369,11 +373,11 @@ void ColouriseScalaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 				continue;
 			} else if (sc.ch == '\"') {
 				const bool interpolated = stylePrevNonWhite != SCE_SCALA_NUMBER && IsScalaIdentifierChar(sc.chPrev);
+				sc.SetState(interpolated ? SCE_SCALA_INTERPOLATED_STRING : SCE_SCALA_STRING);
 				if (sc.MatchNext('"', '"')) {
-					sc.SetState(interpolated ? SCE_SCALA_TRIPLE_INTERPOLATED_STRING : SCE_SCALA_TRIPLE_STRING);
+					static_assert(SCE_SCALA_TRIPLE_INTERPOLATED_STRING - SCE_SCALA_INTERPOLATED_STRING == SCE_SCALA_TRIPLE_STRING - SCE_SCALA_STRING);
+					sc.SetState(sc.state + SCE_SCALA_TRIPLE_STRING - SCE_SCALA_STRING);
 					sc.Advance(2);
-				} else {
-					sc.SetState(interpolated ? SCE_SCALA_INTERPOLATED_STRING : SCE_SCALA_STRING);
 				}
 			} else if (sc.ch == '\'') {
 				int state = SCE_SCALA_CHARACTER;
@@ -461,4 +465,4 @@ void ColouriseScalaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 // TODO: use brace based folding for Scala 2.
 }
 
-LexerModule lmScala(SCLEX_SCALA, ColouriseScalaDoc, "scala", FoldPyDoc);
+extern const LexerModule lmScala(SCLEX_SCALA, ColouriseScalaDoc, "scala", FoldPyDoc);

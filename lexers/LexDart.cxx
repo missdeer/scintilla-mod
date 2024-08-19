@@ -75,6 +75,14 @@ static_assert(DefaultNestedStateBaseStyle + 2 == SCE_DART_STRING_DQ);
 static_assert(DefaultNestedStateBaseStyle + 3 == SCE_DART_TRIPLE_STRING_SQ);
 static_assert(DefaultNestedStateBaseStyle + 4 == SCE_DART_TRIPLE_STRING_DQ);
 
+constexpr bool IsDartIdentifierStart(int ch) noexcept {
+	return IsIdentifierStart(ch) || ch == '$';
+}
+
+constexpr bool IsDartIdentifierChar(int ch) noexcept {
+	return IsIdentifierChar(ch) || ch == '$';
+}
+
 constexpr bool IsDeclarableOperator(int ch) noexcept {
 	// https://github.com/dart-lang/sdk/blob/main/sdk/lib/core/symbol.dart
 	return AnyOf(ch, '+', '-', '*', '/', '%', '~', '&', '|',
@@ -110,7 +118,6 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 	int chBefore = 0;
 	int visibleCharsBefore = 0;
 	int chPrevNonWhite = 0;
-	bool simpleStringInterpolation = false;
 	EscapeSequence escSeq;
 
 	StyleContext sc(startPos, lengthDoc, initStyle, styler);
@@ -152,33 +159,27 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 			}
 			break;
 
+		case SCE_DART_IDENTIFIER_NODOLLAR:
 		case SCE_DART_IDENTIFIER:
-		case SCE_DART_VARIABLE:
-		case SCE_DART_VARIABLE2:
 		case SCE_DART_METADATA:
 		case SCE_DART_SYMBOL_IDENTIFIER:
-			if (!IsIdentifierCharEx(sc.ch)) {
-				switch (sc.state) {
-				case SCE_DART_VARIABLE2:
-					sc.SetState(escSeq.outerState);
-					continue;
-
-				case SCE_DART_METADATA:
-				case SCE_DART_SYMBOL_IDENTIFIER:
+			if (!IsDartIdentifierChar(sc.ch) || (sc.ch == '$' && sc.state == SCE_DART_IDENTIFIER_NODOLLAR)) {
+				if (sc.state == SCE_DART_METADATA || sc.state == SCE_DART_SYMBOL_IDENTIFIER) {
 					if (sc.ch == '.') {
 						const int state = sc.state;
 						sc.SetState(SCE_DART_OPERATOR);
 						sc.ForwardSetState(state);
 						continue;
 					}
-					break;
-
-				case SCE_DART_IDENTIFIER: {
+				} else {
 					char s[128];
 					sc.GetCurrent(s, sizeof(s));
+					const int state = sc.state;
 					if (keywordLists[KeywordIndex_Keyword].InList(s)) {
 						sc.ChangeState(SCE_DART_WORD);
-						if (StrEqualsAny(s, "import", "part")) {
+						if (state == SCE_DART_IDENTIFIER_NODOLLAR) {
+							kwType = KeywordType::None;
+						} else if (StrEqualsAny(s, "import", "part")) {
 							if (visibleChars == sc.LengthCurrent()) {
 								lineStateLineType = DartLineStateMaskImport;
 							}
@@ -193,7 +194,7 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 						}
 						if (kwType > KeywordType::None && kwType < KeywordType::Return) {
 							const int chNext = sc.GetLineNextChar();
-							if (!IsIdentifierStartEx(chNext)) {
+							if (!IsDartIdentifierStart(chNext)) {
 								kwType = KeywordType::None;
 							}
 						}
@@ -203,28 +204,28 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 						sc.ChangeState(SCE_DART_CLASS);
 					} else if (keywordLists[KeywordIndex_Enumeration].InList(s)) {
 						sc.ChangeState(SCE_DART_ENUM);
-					} else if (sc.ch == ':') {
-						if (chBefore == ',' || chBefore == '{') {
-							sc.ChangeState(SCE_DART_KEY);
+					} else if (state == SCE_DART_IDENTIFIER && sc.ch == ':') {
+						if (chBefore == ',' || chBefore == '{' || chBefore == '(') {
+							sc.ChangeState(SCE_DART_KEY); // map key or named parameter
 						} else if (IsJumpLabelPrevChar(chBefore)) {
 							sc.ChangeState(SCE_DART_LABEL);
 						}
-					} else if (sc.ch != '.') {
+					} else if (state == SCE_DART_IDENTIFIER && sc.ch != '.') {
 						if (kwType > KeywordType::None && kwType < KeywordType::Return) {
 							sc.ChangeState(static_cast<int>(kwType));
 						} else {
-							const int chNext = sc.GetDocNextChar(sc.ch == '?');
+							const int chNext = sc.GetLineNextChar(sc.ch == '?');
 							if (chNext == '(') {
 								// type method()
 								// type[] method()
 								// type<type> method()
-								if (kwType != KeywordType::Return && (IsIdentifierCharEx(chBefore) || chBefore == ']')) {
+								if (kwType != KeywordType::Return && (IsDartIdentifierChar(chBefore) || chBefore == ']')) {
 									sc.ChangeState(SCE_DART_FUNCTION_DEFINITION);
 								} else {
 									sc.ChangeState(SCE_DART_FUNCTION);
 								}
 							} else if ((chBeforeIdentifier == '<' && (chNext == '>' || chNext == '<'))
-								|| IsIdentifierStartEx(chNext)) {
+								|| IsDartIdentifierStart(chNext)) {
 								// type<type>
 								// type<type?>
 								// type<type<type>>
@@ -239,7 +240,10 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 					if (sc.state != SCE_DART_WORD && sc.ch != '.') {
 						kwType = KeywordType::None;
 					}
-				} break;
+					if (state == SCE_DART_IDENTIFIER_NODOLLAR) {
+						sc.SetState(escSeq.outerState);
+						continue;
+					}
 				}
 
 				sc.SetState(SCE_DART_DEFAULT);
@@ -298,22 +302,20 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 					}
 				}
 			} else if (sc.ch == '$' && sc.state < SCE_DART_RAWSTRING_SQ) {
-				if (sc.chNext == '{' || sc.chNext == '(') {
-					if (sc.chNext == '(') {
-						simpleStringInterpolation = true;
-						escSeq.outerState = sc.state;
-					} else {
-						nestedState.push_back(sc.state);
-					}
-					sc.SetState(SCE_DART_OPERATOR2);
-					sc.Forward();
-				} else if (IsIdentifierStartEx(sc.chNext)) {
-					escSeq.outerState = sc.state;
-					sc.SetState(SCE_DART_VARIABLE2);
+				escSeq.outerState = sc.state;
+				sc.SetState(SCE_DART_OPERATOR2);
+				sc.Forward();
+				if (sc.ch == '{') {
+					nestedState.push_back(escSeq.outerState);
+				} else if (sc.ch != '$' && IsDartIdentifierStart(sc.ch)) {
+					sc.SetState(SCE_DART_IDENTIFIER_NODOLLAR);
+				} else { // error
+					sc.SetState(escSeq.outerState);
+					continue;
 				}
 			} else if (sc.ch == GetStringQuote(sc.state) && (!IsTripleString(sc.state) || sc.MatchNext())) {
 				if (IsTripleString(sc.state)) {
-					sc.Advance(2);
+					sc.Forward(2);
 				}
 				sc.Forward();
 				if (sc.state <= SCE_DART_STRING_DQ && (chBefore == ',' || chBefore == '{')) {
@@ -358,56 +360,34 @@ void ColouriseDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSt
 			}
 			if (sc.ch == 'r' && (sc.chNext == '\'' || sc.chNext == '"')) {
 				sc.SetState((sc.chNext == '\'') ? SCE_DART_RAWSTRING_SQ : SCE_DART_RAWSTRING_DQ);
-				sc.Forward(2);
-				if (sc.chPrev == '\'' && sc.Match('\'', '\'')) {
-					sc.ChangeState(SCE_DART_TRIPLE_RAWSTRING_SQ);
-					sc.Forward(2);
-				} else if (sc.chPrev == '"' && sc.Match('"', '"')) {
-					sc.ChangeState(SCE_DART_TRIPLE_RAWSTRING_DQ);
+				sc.Forward();
+				if (sc.MatchNext()) {
+					static_assert(SCE_DART_TRIPLE_RAWSTRING_SQ - SCE_DART_RAWSTRING_SQ == SCE_DART_TRIPLE_RAWSTRING_DQ - SCE_DART_RAWSTRING_DQ);
+					sc.ChangeState(sc.state + SCE_DART_TRIPLE_RAWSTRING_SQ - SCE_DART_RAWSTRING_SQ);
 					sc.Forward(2);
 				}
-				continue;
-			}
-			if (sc.ch == '"') {
-				if (sc.MatchNext('"', '"')) {
-					sc.SetState(SCE_DART_TRIPLE_STRING_DQ);
-					sc.Advance(2);
-				} else {
-					chBefore = chPrevNonWhite;
-					sc.SetState(SCE_DART_STRING_DQ);
-				}
-			} else if (sc.ch == '\'') {
-				if (sc.MatchNext('\'', '\'')) {
-					sc.SetState(SCE_DART_TRIPLE_STRING_SQ);
-					sc.Advance(2);
-				} else {
-					chBefore = chPrevNonWhite;
-					sc.SetState(SCE_DART_STRING_SQ);
+			} else if (sc.ch == '\'' || sc.ch == '"') {
+				sc.SetState((sc.ch == '\'') ? SCE_DART_STRING_SQ : SCE_DART_STRING_DQ);
+				chBefore = chPrevNonWhite;
+				if (sc.MatchNext()) {
+					static_assert(SCE_DART_TRIPLE_STRING_SQ - SCE_DART_STRING_SQ == SCE_DART_TRIPLE_STRING_DQ - SCE_DART_STRING_DQ);
+					sc.ChangeState(sc.state + SCE_DART_TRIPLE_STRING_DQ - SCE_DART_STRING_DQ);
+					sc.Forward(2);
 				}
 			} else if (IsNumberStart(sc.ch, sc.chNext)) {
 				sc.SetState(SCE_DART_NUMBER);
-			} else if ((sc.ch == '@' || sc.ch == '$') && IsIdentifierStartEx(sc.chNext)) {
-				sc.SetState((sc.ch == '@') ? SCE_DART_METADATA : SCE_DART_VARIABLE);
-			} else if (sc.ch == '#') {
-				if (IsIdentifierStartEx(sc.chNext)) {
-					sc.SetState(SCE_DART_SYMBOL_IDENTIFIER);
-				} else if (IsDeclarableOperator(sc.chNext)) {
-					sc.SetState(SCE_DART_SYMBOL_OPERATOR);
-				}
-			} else if (IsIdentifierStartEx(sc.ch)) {
+			} else if ((sc.ch == '@' || sc.ch == '#') && IsDartIdentifierStart(sc.chNext)) {
+				sc.SetState((sc.ch == '@') ? SCE_DART_METADATA : SCE_DART_SYMBOL_IDENTIFIER);
+			} else if (IsDartIdentifierStart(sc.ch)) {
 				chBefore = chPrevNonWhite;
 				if (chPrevNonWhite != '.') {
 					chBeforeIdentifier = chPrevNonWhite;
 				}
 				sc.SetState(SCE_DART_IDENTIFIER);
+			} else if (sc.ch == '#' && IsDeclarableOperator(sc.chNext)) {
+				sc.SetState(SCE_DART_SYMBOL_OPERATOR);
 			} else if (IsAGraphic(sc.ch)) {
 				sc.SetState(SCE_DART_OPERATOR);
-				if (simpleStringInterpolation && sc.ch == ')') {
-					simpleStringInterpolation = false;
-					sc.ChangeState(SCE_DART_OPERATOR2);
-					sc.ForwardSetState(escSeq.outerState);
-					continue;
-				}
 				if (!nestedState.empty()) {
 					sc.ChangeState(SCE_DART_OPERATOR2);
 					if (sc.ch == '{') {
@@ -559,4 +539,4 @@ void FoldDartDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, 
 
 }
 
-LexerModule lmDart(SCLEX_DART, ColouriseDartDoc, "dart", FoldDartDoc);
+extern const LexerModule lmDart(SCLEX_DART, ColouriseDartDoc, "dart", FoldDartDoc);

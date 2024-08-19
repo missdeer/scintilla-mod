@@ -94,16 +94,14 @@ constexpr bool IsStringStyle(int style) noexcept {
 }
 
 constexpr char GetStringQuote(int style) noexcept {
-	switch (style) {
-	case SCE_BAT_STRINGDQ: return '\"';
-	case SCE_BAT_STRINGSQ: return '\'';
-	case SCE_BAT_STRINGBT: return '`';
-	default: return '\0';
-	}
+	constexpr unsigned mask = ('\"' << 8*(SCE_BAT_STRINGDQ - SCE_BAT_STRINGDQ))
+		| ('\'' << 8*(SCE_BAT_STRINGSQ - SCE_BAT_STRINGDQ))
+		| ('`' << 8*(SCE_BAT_STRINGBT - SCE_BAT_STRINGDQ));
+	const unsigned offset = 8*(style - SCE_BAT_STRINGDQ);
+	return (offset > 24) ? '\0' : ((mask >> offset) & 0xff);
 }
 
-bool IsStringArgumentEnd(const StyleContext &sc, int outerStyle, Command command, int parenCount) noexcept {
-	const int ch = (command == Command::SetValue) ? sc.GetLineNextChar() : sc.ch;
+constexpr bool IsStringArgumentEnd(int ch, int outerStyle, int parenCount) noexcept {
 	return AnyOf(ch, '\0', '\n', '\r', ' ', '\t', '&', '|', '<', '>')
 		|| (parenCount != 0 && ch == ')')
 		|| ch == GetStringQuote(outerStyle);
@@ -420,7 +418,7 @@ void ColouriseBatchDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 					state = TryTakeAndPop(nestedState);
 					sc.Forward();
 					if ((command == Command::SetValue || command == Command::Argument || command == Command::Escape)
-						&& !IsStringArgumentEnd(sc, state, command, parenCount)) {
+						&& !IsStringArgumentEnd(sc.ch, state, parenCount)) {
 						state = SCE_BAT_STRINGNQ;
 					}
 				} else {
@@ -444,7 +442,7 @@ void ColouriseBatchDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 				}
 			} else if (sc.state == SCE_BAT_STRINGNQ) {
 				const int state = TryGetBack(nestedState);
-				if (IsStringArgumentEnd(sc, state, command, parenCount)) {
+				if (IsStringArgumentEnd(sc.ch, state, parenCount)) {
 					sc.SetState(state);
 					continue;
 				}
@@ -664,4 +662,4 @@ void ColouriseBatchDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initS
 
 }
 
-LexerModule lmBatch(SCLEX_BATCH, ColouriseBatchDoc, "batch");
+extern const LexerModule lmBatch(SCLEX_BATCH, ColouriseBatchDoc, "batch");

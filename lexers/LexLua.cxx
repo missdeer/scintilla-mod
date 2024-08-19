@@ -41,7 +41,7 @@ struct EscapeSequence {
 	// highlight any character as escape sequence.
 	void resetEscapeState(int state, int chNext) noexcept {
 		outerState = state;
-		digitsLeft = 0;
+		digitsLeft = 1;
 		hex = true;
 		brace = false;
 		if (chNext == 'x') {
@@ -51,8 +51,6 @@ struct EscapeSequence {
 		} else if (IsADigit(chNext)) {
 			digitsLeft = 3;
 			hex = false;
-		} else {
-			digitsLeft = 1;
 		}
 	}
 	bool atEscapeEnd(int ch) noexcept {
@@ -457,4 +455,4 @@ void FoldLuaDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyle, L
 
 }
 
-LexerModule lmLua(SCLEX_LUA, ColouriseLuaDoc, "lua", FoldLuaDoc);
+extern const LexerModule lmLua(SCLEX_LUA, ColouriseLuaDoc, "lua", FoldLuaDoc);

@@ -33,7 +33,7 @@ struct EscapeSequence {
 	// highlight any character as escape sequence.
 	void resetEscapeState(int state, int chNext) noexcept {
 		outerState = state;
-		digitsLeft = 0;
+		digitsLeft = 1;
 		numBase = 16;
 		if (chNext == 'x') {
 			digitsLeft = 7;
@@ -43,8 +43,6 @@ struct EscapeSequence {
 		} else if (IsADigit(chNext)) {
 			digitsLeft = 7;
 			numBase = 10;
-		} else {
-			digitsLeft = 1;
 		}
 	}
 	bool atEscapeEnd(int ch) noexcept {
@@ -277,4 +275,4 @@ void ColouriseHaskellDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int ini
 
 }
 
-LexerModule lmHaskell(SCLEX_HASKELL, ColouriseHaskellDoc, "haskell", FoldPyDoc);
+extern const LexerModule lmHaskell(SCLEX_HASKELL, ColouriseHaskellDoc, "haskell", FoldPyDoc);

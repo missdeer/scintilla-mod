@@ -183,7 +183,7 @@ void ColouriseFortranDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int ini
 							kwType = KeywordType::Function;
 						} else if (state == SCE_F_FOLDING_WORD) {
 							if (StrEqual(s, "if")) {
-								state = SCE_F_WORD; 
+								state = SCE_F_WORD;
 								ifConstruct = prevWord != KeywordType::Else;
 							} else if (StrEqual(s, "type")) {
 								if (chNext == '(' || prevWord == KeywordType::Select) {
@@ -411,4 +411,4 @@ void FoldFortranDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int /*initSt
 
 }
 
-LexerModule lmFortran(SCLEX_FORTRAN, ColouriseFortranDoc, "fortran", FoldFortranDoc);
+extern const LexerModule lmFortran(SCLEX_FORTRAN, ColouriseFortranDoc, "fortran", FoldFortranDoc);

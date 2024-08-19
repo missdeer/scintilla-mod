@@ -410,8 +410,8 @@ void ColouriseVerilogDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int ini
 
 		case SCE_V_COMMENTBLOCKVSD:
 			if (sc.Match('$', 'e')) {
-				char s[4] = "";
-				styler.GetRange(sc.currentPos + 2, sc.currentPos + 5, s, 4);
+				char s[4]{};
+				styler.GetRange(sc.currentPos + 2, sc.currentPos + 5, s, sizeof(s));
 				if (s[0] == 'n' && s[1] == 'd' && !IsVWordChar(s[2])) {
 					sc.Advance(3); // $end
 					sc.ForwardSetState(SCE_V_DEFAULT);
@@ -597,4 +597,4 @@ void FoldVerilogDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initStyl
 
 }
 
-LexerModule lmVerilog(SCLEX_VERILOG, ColouriseVerilogDoc, "verilog", FoldVerilogDoc);
+extern const LexerModule lmVerilog(SCLEX_VERILOG, ColouriseVerilogDoc, "verilog", FoldVerilogDoc);
