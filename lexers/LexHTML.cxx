@@ -37,8 +37,9 @@ enum script_mode { eHtml = 0, eNonHtmlScript, eNonHtmlPreProc, eNonHtmlScriptPre
 // Put an upper limit to bound time taken for unexpected text.
 constexpr Sci_PositionU maxLengthCheck = 200;
 
-script_type segIsScriptingIndicator(LexAccessor &styler, Sci_PositionU start, Sci_PositionU end, script_type prevValue) {
+script_type segIsScriptingIndicator(const LexAccessor &styler, Sci_PositionU start, Sci_PositionU end, script_type prevValue) {
 	char s[128];
+	memset(s, '\0', 4); // avoid garbage when `end` position is out of range for `<?xml`
 	styler.GetRangeLowered(start, end, s, sizeof(s));
 	//Platform::DebugPrintf("Scripting indicator [%s]\n", s);
 	if (strstr(s, "vbs"))
@@ -276,9 +277,9 @@ int classifyWordHTVB(Sci_PositionU start, Sci_PositionU end, const WordList &key
 		return SCE_HB_DEFAULT;
 }
 
-bool isWordHSGML(Sci_PositionU start, Sci_PositionU end, const WordList &keywords, LexAccessor &styler) noexcept {
+bool isWordHSGML(Sci_PositionU start, Sci_PositionU end, const WordList &keywords, const LexAccessor &styler) noexcept {
 	char s[63 + 1];
-	styler.GetRange(start, end + 1, s, sizeof(s));
+	styler.GetRange(start, end, s, sizeof(s));
 	return keywords.InList(s);
 }
 
@@ -799,7 +800,7 @@ void ColouriseHyperTextDoc(Sci_PositionU startPos, Sci_Position length, int init
 				styler.ColorTo(i - 1, StateToPrint);
 				state = SCE_H_SGML_COMMENT;
 			} else if (!issgmlwordchar(ch)) {
-				if (isWordHSGML(styler.GetStartSegment(), i - 1, keywordsSGML, styler)) {
+				if (isWordHSGML(styler.GetStartSegment(), i, keywordsSGML, styler)) {
 					styler.ColorTo(i, StateToPrint);
 					state = SCE_H_SGML_1ST_PARAM;
 				} else {
