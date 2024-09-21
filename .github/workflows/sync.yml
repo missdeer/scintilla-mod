@@ -22,9 +22,9 @@ jobs:
           env:
             GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}        
           run: |
-            git clone https://github.com/zufuliu/notepad2.git
-            cp -r notepad2/scintilla/* ./
-            rm -rf notepad2
+            git clone https://github.com/zufuliu/notepad4.git
+            cp -r notepad4/scintilla/* ./
+            rm -rf notepad4
             git remote -v
             git config user.name "auto-sync-scintilla[bot]"
             git config user.email "auto-sync-scintilla[bot]@users.noreply.github.com"
