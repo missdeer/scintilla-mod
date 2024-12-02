@@ -799,7 +799,7 @@ Sci::Position Editor::MovePositionOutsideChar(Sci::Position pos, Sci::Position m
 }
 
 SelectionPosition Editor::MovePositionOutsideChar(SelectionPosition pos, Sci::Position moveDir, bool checkLineEnd) const noexcept {
-	const Sci::Position posMoved = pdoc->MovePositionOutsideChar(pos.Position(), moveDir, checkLineEnd);
+	const Sci::Position posMoved = pdoc->MovePositionOutsideChar(pos.Position(), static_cast<int>(moveDir), checkLineEnd);
 	if (posMoved != pos.Position())
 		pos.SetPosition(posMoved);
 	if (vs.ProtectionActive()) {
@@ -2794,6 +2794,12 @@ void Editor::NotifyModified(Document *, DocModification mh, void *) {
 			const Sci::Line lineDoc = pdoc->SciLineFromPosition(mh.position);
 			const Sci::Line lines = std::max<Sci::Line>(0, mh.linesAdded);
 			if (Wrapping()) {
+				// Check if this modification crosses any of the wrap points
+				if (wrapPending.NeedsWrap()) {
+					if (lineDoc < wrapPending.end) { // Inserted/deleted before or inside wrap range
+						wrapPending.end += mh.linesAdded;
+					}
+				}
 				NeedWrapping(lineDoc, lineDoc + lines + 1);
 			}
 			RefreshStyleData();
