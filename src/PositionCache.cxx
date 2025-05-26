@@ -88,23 +88,20 @@ LineLayout::LineLayout(Sci::Line lineNumber_, int maxLineLength_) :
 	Resize(maxLineLength_);
 }
 
-LineLayout::~LineLayout() {
-	Free();
-}
-
 void LineLayout::Resize(int maxLineLength_) {
 	if (maxLineLength_ > maxLineLength) {
-		Free();
 		const size_t lineAllocation = maxLineLength_ + 1;
-		chars = std::make_unique<char[]>(lineAllocation);
-		styles = std::make_unique<unsigned char[]>(lineAllocation);
+		auto chars_ = std::make_unique<char[]>(lineAllocation);
+		chars.swap(chars_);
+		auto styles_ = std::make_unique<unsigned char[]>(lineAllocation);
+		styles.swap(styles_);
 		// Extra position allocated as sometimes the Windows
 		// GetTextExtentExPoint API writes an extra element.
-		positions = std::make_unique<XYPOSITION[]>(lineAllocation + 1);
-		if (bidiData) {
-			bidiData->Resize(maxLineLength_);
-		}
-
+		auto positions_ = std::make_unique<XYPOSITION[]>(lineAllocation + 1);
+		positions.swap(positions_);
+		lineStarts.reset();
+		bidiData.reset();
+		lenLineStarts = 0;
 		maxLineLength = maxLineLength_;
 	}
 }
@@ -121,15 +118,6 @@ void LineLayout::EnsureBidiData() {
 		bidiData = std::make_unique<BidiData>();
 		bidiData->Resize(maxLineLength);
 	}
-}
-
-void LineLayout::Free() noexcept {
-	chars.reset();
-	styles.reset();
-	positions.reset();
-	lineStarts.reset();
-	lenLineStarts = 0;
-	bidiData.reset();
 }
 
 void LineLayout::ClearPositions() const noexcept {
@@ -193,15 +181,11 @@ int LineLayout::SubLineFromPosition(int posInLine, PointEnd pe) const noexcept {
 		return lines - 1;
 	}
 
+	// Return subline not start of next for PointEnd::subLineEnd
+	posInLine += FlagSet(pe, PointEnd::subLineEnd) ? 1 : 0;
 	for (int line = 0; line < lines; line++) {
-		if (FlagSet(pe, PointEnd::subLineEnd)) {
-			// Return subline not start of next
-			if (lineStarts[line + 1] <= posInLine + 1)
-				return line;
-		} else {
-			if (lineStarts[line + 1] <= posInLine)
-				return line;
-		}
+		if (lineStarts[line + 1] <= posInLine)
+			return line;
 	}
 
 	return lines - 1;
@@ -210,13 +194,13 @@ int LineLayout::SubLineFromPosition(int posInLine, PointEnd pe) const noexcept {
 void LineLayout::AddLineStart(Sci::Position start) {
 	lines++;
 	if (lines >= lenLineStarts) {
-		const int newMaxLines = lines + 20;
+		const int newMaxLines = lines*2 + 14; // minimum 16
 		std::unique_ptr<int[]> newLineStarts = std::make_unique<int[]>(newMaxLines);
 		if (lenLineStarts) {
 			//std::copy_n(lineStarts.get(), lenLineStarts, newLineStarts.get());
 			memcpy(newLineStarts.get(), lineStarts.get(), lenLineStarts*sizeof(int));
 		}
-		lineStarts = std::move(newLineStarts);
+		lineStarts.swap(newLineStarts);
 		lenLineStarts = newMaxLines;
 	}
 	lineStarts[lines] = static_cast<int>(start);
@@ -335,11 +319,11 @@ Interval LineLayout::Span(int start, int end) const noexcept {
 }
 
 Interval LineLayout::SpanByte(int index) const noexcept {
-	return Span(index, index+1);
+	return Span(index, index + 1);
 }
 
 int LineLayout::EndLineStyle() const noexcept {
-	return styles[numCharsBeforeEOL > 0 ? numCharsBeforeEOL - 1 : 0];
+	return styles[std::max(numCharsBeforeEOL - 1, 0)];
 }
 
 namespace {
@@ -397,8 +381,8 @@ void LineLayout::WrapLine(const Document *pdoc, Sci::Position posLineStart, Wrap
 	XYPOSITION startOffset = wrapWidth;
 	Sci::Position p = 0;
 	if (partialLine && lines > 2 && wrapIndent == wrapIndent_) {
-		lastLineStart = LineStart(lines - 2);
 		lines -= 2;
+		lastLineStart = lineStarts[lines];
 		p = lastLineStart + 1;
 		startOffset += positions[lastLineStart] - wrapIndent_;
 	} else {
@@ -414,11 +398,12 @@ void LineLayout::WrapLine(const Document *pdoc, Sci::Position posLineStart, Wrap
 		if (p < lastSegmentEnd) {
 			// backtrack to find lastGoodBreak
 			Sci::Position lastGoodBreak = p;
+			// Try moving to start of last character
 			if (p > 0) {
 				lastGoodBreak = CharacterBoundary(p, -1);
 			}
 			bool foundBreak = false;
-			if (wrapState != Wrap::Char) {
+			if (wrapState != Wrap::Char && lastGoodBreak != lastLineStart) {
 				Sci::Position pos = lastGoodBreak;
 				CharacterClass ccPrev = CharacterClass::space;
 				WrapBreak wbPrev = WrapBreak::None;
@@ -429,7 +414,7 @@ void LineLayout::WrapLine(const Document *pdoc, Sci::Position posLineStart, Wrap
 				} else if (wrapState == Wrap::Word) {
 					wbPrev = GetWrapBreak(chars[pos]);
 				}
-				while (pos > lastLineStart) {
+				do {
 					// style boundary and space
 					if (wrapState != Wrap::WhiteSpace && (styles[pos - 1] != styles[pos])) {
 						foundBreak = true;
@@ -470,16 +455,12 @@ void LineLayout::WrapLine(const Document *pdoc, Sci::Position posLineStart, Wrap
 						}
 					}
 					pos = posBefore;
-				}
+				} while (pos > lastLineStart);
 				if (pos > lastLineStart) {
 					lastGoodBreak = pos;
 				}
 			}
 			if (lastGoodBreak == lastLineStart || (isUtf8 && !foundBreak)) {
-				// Try moving to start of last character
-				if (lastGoodBreak == lastLineStart && p > 0) {
-					lastGoodBreak = CharacterBoundary(p, -1);
-				}
 				if (isUtf8 && lastGoodBreak != lastLineStart) {
 					const char *text = &chars[lastLineStart];
 					size_t lengthSegment = lastGoodBreak - lastLineStart;
@@ -488,11 +469,11 @@ void LineLayout::WrapLine(const Document *pdoc, Sci::Position posLineStart, Wrap
 				}
 				if (lastGoodBreak == lastLineStart) {
 					// Ensure at least one character on line.
-					lastGoodBreak = CharacterBoundary(lastGoodBreak + 1, 1);
+					lastGoodBreak = CharacterBoundary(lastGoodBreak + 1, 1, false);
 				}
 			}
+			AddLineStart(lastGoodBreak);
 			lastLineStart = lastGoodBreak;
-			AddLineStart(lastLineStart);
 			startOffset = positions[lastLineStart];
 			// take into account the space for start wrap mark and indent
 			startOffset += wrapWidth - wrapIndent;
@@ -813,8 +794,8 @@ LineLayout *LineLayoutCache::Retrieve(Sci::Line lineNumber, Sci::Line lineCaret,
 	if (ret) {
 		if (!ret->CanHold(lineNumber, maxChars)) {
 			//printf("USE line=%zd/%zd, caret=%zd/%zd top=%zd, pos=%zu, clock=%d\n",
-			//	lineNumber, ret->lineNumber, lineCaret, lastCaretSlot, topLine, pos, styleClock_);
-			ret->Free();
+			//	lineNumber, ret->LineNumber(), lineCaret, lastCaretSlot, topLine, pos, styleClock_);
+			ret->~LineLayout();
 			::new (ret) LineLayout(lineNumber, maxChars);
 		} else {
 			//printf("HIT line=%zd, caret=%zd/%zd top=%zd, pos=%zu, clock=%d, validity=%d\n",
