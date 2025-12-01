@@ -2317,8 +2317,8 @@ Sci::Position Document::FindText(Sci::Position minPos, Sci::Position maxPos, con
 				}
 			}
 		} else if (CpUtf8 == dbcsCodePage) {
-			constexpr size_t maxFoldingExpansion = 4;
-			searchThing.Allocate((lengthFind + 1) * UTF8MaxBytes * maxFoldingExpansion + 1);
+			constexpr size_t maxFoldingExpansion = 3; // same as maxExpansionCaseConversion
+			searchThing.Allocate((lengthFind + UTF8MaxBytes) * maxFoldingExpansion + 1);
 			const size_t lenSearch = pcf->Fold(searchThing.data(), searchThing.size(), search, lengthFind);
 			const unsigned char * const searchData = reinterpret_cast<const unsigned char *>(searchThing.data());
 			//while (forward ? (pos < endPos) : (pos >= endPos)) {
@@ -2366,8 +2366,9 @@ Sci::Position Document::FindText(Sci::Position minPos, Sci::Position maxPos, con
 					}
 				}
 				if (characterMatches && (indexSearch == lenSearch)) {
-					if (MatchesWordOptions(word, wordStart, pos, posIndexDocument - pos)) {
-						*length = posIndexDocument - pos;
+					posIndexDocument -= pos;
+					if (MatchesWordOptions(word, wordStart, pos, posIndexDocument)) {
+						*length = posIndexDocument;
 						return pos;
 					}
 				}
@@ -2380,51 +2381,59 @@ Sci::Position Document::FindText(Sci::Position minPos, Sci::Position maxPos, con
 				}
 			}
 		} else if (dbcsCodePage) {
-			constexpr size_t maxBytesCharacter = 2;
-			constexpr size_t maxFoldingExpansion = 4;
-			searchThing.Allocate((lengthFind + 1) * maxBytesCharacter * maxFoldingExpansion + 1);
-			const size_t lenSearch = pcf->Fold(searchThing.data(), searchThing.size(), search, lengthFind);
+			searchThing.Allocate(lengthFind + 2 + 1);
+			const CaseFolderTable * const folder = down_cast<CaseFolderTable *>(pcf.get());
+			const size_t lenSearch = folder->Fold(searchThing.data(), searchThing.size(), search, lengthFind);
 			const unsigned char * const searchData = reinterpret_cast<const unsigned char *>(searchThing.data());
 			//while (forward ? (pos < endPos) : (pos >= endPos)) {
 			while ((direction ^ (pos - endPos)) < 0) {
-				int widthFirstCharacter = 0;
-				Sci::Position indexDocument = 0;
+				int widthFirstCharacter = 1;
+				Sci::Position indexDocument = pos;
 				size_t indexSearch = 0;
 				bool characterMatches = true;
 				for (;;) {
-					const unsigned char leadByte = cbView[pos + indexDocument];
-					const int widthChar = 1 + IsDBCSLeadByteNoExcept(leadByte);
-					if (!widthFirstCharacter) {
-						widthFirstCharacter = widthChar;
-					}
-					if ((pos + indexDocument + widthChar) > limitPos) {
+					const char leadByte = cbView[indexDocument];
+					int widthChar = 1;
+					if ((indexDocument + 1) > limitPos) {
 						break;
 					}
-					size_t lenFlat = 1;
-					if (widthChar == 1) {
-						characterMatches = searchData[indexSearch] == MakeLowerCase(leadByte);
+					const char chTest = searchData[indexSearch];
+					if (!IsDBCSLeadByteNoExcept(leadByte)) {
+						characterMatches = chTest == folder->FoldChar(leadByte);
 					} else {
-						const char bytes[maxBytesCharacter + 1] {
-							static_cast<char>(leadByte),
-							cbView[pos + indexDocument + 1]
-						};
-						char folded[maxBytesCharacter * maxFoldingExpansion + 1];
-						lenFlat = pcf->Fold(folded, sizeof(folded), bytes, widthChar);
-						// memcmp may examine lenFlat bytes in both arguments so assert it doesn't read past end of searchThing
-						assert((indexSearch + lenFlat) <= searchThing.size());
-						// Does folded match the buffer
-						characterMatches = 0 == memcmp(folded, searchData + indexSearch, lenFlat);
+						const char trailByte = cbView[indexDocument + 1];
+						if (IsDBCSTrailByteNoExcept(trailByte)) {
+							widthChar = 2;
+							if (!indexSearch) {
+								widthFirstCharacter = widthChar;
+							}
+							if ((indexDocument + widthChar) > limitPos) {
+								break;
+							}
+							char folded[2] = {
+								leadByte,
+								trailByte,
+							};
+							folder->Fold(folded, sizeof(folded), folded, widthChar);
+							// memcmp may examine widthChar bytes in both arguments so assert it doesn't read past end of searchThing
+							assert((indexSearch + widthChar) <= searchThing.size());
+							// Does folded match the buffer
+							characterMatches = 0 == memcmp(folded, searchData + indexSearch, widthChar);
+						} else {
+							characterMatches = chTest == leadByte;
+						}
 					}
 					if (!characterMatches) {
 						break;
 					}
 					indexDocument += widthChar;
-					indexSearch += lenFlat;
+					indexSearch += widthChar;
 					if (indexSearch >= lenSearch) {
 						break;
 					}
 				}
 				if (characterMatches && (indexSearch == lenSearch)) {
+					indexDocument -= pos;
 					if (MatchesWordOptions(word, wordStart, pos, indexDocument)) {
 						*length = indexDocument;
 						return pos;
@@ -2441,7 +2450,8 @@ Sci::Position Document::FindText(Sci::Position minPos, Sci::Position maxPos, con
 		} else {
 			const Sci::Position endSearch = (startPos <= endPos) ? endPos - lengthFind + 1 : endPos;
 			searchThing.Allocate(lengthFind + 1);
-			pcf->Fold(searchThing.data(), searchThing.size(), search, lengthFind);
+			const CaseFolderTable * const folder = down_cast<CaseFolderTable *>(pcf.get());
+			folder->Fold(searchThing.data(), searchThing.size(), search, lengthFind);
 			const char * const searchData = searchThing.data();
 			//while (forward ? (pos < endSearch) : (pos >= endSearch)) {
 			while ((direction ^ (pos - endSearch)) < 0) {
@@ -2449,13 +2459,8 @@ Sci::Position Document::FindText(Sci::Position minPos, Sci::Position maxPos, con
 				for (Sci::Position indexSearch = 0; (indexSearch < lengthFind) && found; indexSearch++) {
 					const char ch = cbView[pos + indexSearch];
 					const char chTest = searchData[indexSearch];
-					if (UTF8IsAscii(ch)) {
-						found = chTest == MakeLowerCase(ch);
-					} else {
-						char folded[2];
-						pcf->Fold(folded, sizeof(folded), &ch, 1);
-						found = folded[0] == chTest;
-					}
+					const char folded = folder->FoldChar(ch);
+					found = chTest == folded;
 				}
 				if (found && MatchesWordOptions(word, wordStart, pos, lengthFind)) {
 					return pos;
