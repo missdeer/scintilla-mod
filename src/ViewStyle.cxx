@@ -51,6 +51,8 @@ constexpr unsigned int mid = 0x80U;
 constexpr unsigned int half = 0x7fU;
 constexpr unsigned int quarter = 0x3fU;
 
+constexpr int startExtendedStyles = 0x100;
+
 }
 
 void FontRealised::Realise(Surface &surface, int zoomLevel, Technology technology, const FontSpecification &fs, const char *localeName) {
@@ -75,11 +77,13 @@ void FontRealised::Realise(Surface &surface, int zoomLevel, Technology technolog
 		// "Ay" is normally strongly kerned and "fi" may be a ligature
 		constexpr std::string_view allASCIIGraphic("Ayfi"
 		// python: ''.join(chr(ch) for ch in range(32, 127))
-		" !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
+		" !\"#$%&\'()*+,-./0123456789:;<=>?@[\\]^_`{|}~abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 		std::array<XYPOSITION, allASCIIGraphic.length()> positions {};
 		surface.MeasureWidthsUTF8(font.get(), allASCIIGraphic, positions.data());
 
-		XYPOSITION aveCharWidth = positions.back() * (1.0 / allASCIIGraphic.length());
+		constexpr size_t tilde = allASCIIGraphic.length() - 53;
+		static_assert(allASCIIGraphic[tilde] == '~');
+		XYPOSITION aveCharWidth = (positions.back() - positions[tilde]) * (1.0 / 52);
 		if (technology == Technology::Default/*!surface.SupportsFeature(Supports::FractionalStrokeWidth)*/) {
 			aveCharWidth = std::round(aveCharWidth);
 		}
@@ -213,7 +217,7 @@ ViewStyle::ViewStyle(size_t stylesSize_):
 	markers[indexHistoryRevertedToModified].fore = revertedToChange;
 	markers[indexHistoryRevertedToModified].markType = MarkerSymbol::Bar;
 
-	nextExtendedStyle = 256;
+	nextExtendedStyle = startExtendedStyles;
 	// There are no image markers by default, so no need for calling CalcLargestMarkerHeight()
 	largestMarkerHeight = 0;
 
@@ -224,9 +228,11 @@ ViewStyle::ViewStyle(size_t stylesSize_):
 	lineOverlap = 0;
 	maxAscent = 1;
 	maxDescent = 1;
-	aveCharWidth = 8;
-	spaceWidth = 8;
-	tabWidth = spaceWidth * 8;
+	constexpr XYPOSITION defaultWidthChar = 8.0;	// Reasonable initial approximation
+	aveCharWidth = defaultWidthChar;
+	spaceWidth = defaultWidthChar;
+	constexpr int defaultTabSpaces = 8;
+	tabWidth = spaceWidth * defaultTabSpaces;
 
 	// Default is for no selection foregrounds
 	elementColoursMask = 0;
@@ -258,7 +264,8 @@ ViewStyle::ViewStyle(size_t stylesSize_):
 	leftMarginWidth = 1;
 	rightMarginWidth = 1;
 	ms[0] = MarginStyle(MarginType::Number);
-	ms[1] = MarginStyle(MarginType::Symbol, 16, ~MaskFolders);
+	constexpr int widthMarks = 16;
+	ms[1] = MarginStyle(MarginType::Symbol, widthMarks, ~MaskFolders);
 	ms[2] = MarginStyle(MarginType::Symbol);
 	CalculateMarginWidthAndMask();
 	textStart = marginInside ? fixedColumnWidth : leftMarginWidth;
@@ -377,7 +384,7 @@ ViewStyle::~ViewStyle() = default;
 
 void ViewStyle::CalculateMarginWidthAndMask() noexcept {
 	fixedColumnWidth = marginInside ? leftMarginWidth : 0;
-	maskInLine = 0xffffffffU;
+	maskInLine = UINT32_MAX;
 	MarkerMask maskDefinedMarkers = 0;
 	for (const MarginStyle &m : ms) {
 		fixedColumnWidth += m.width;
@@ -458,7 +465,9 @@ void ViewStyle::Refresh(Surface &surface, int tabInChars) {
 	maxAscent = std::max(1.0, maxAscent + extraAscent);
 	maxDescent = std::max(0.0, maxDescent + extraDescent);
 	lineHeight = static_cast<int>(std::lround(maxAscent + maxDescent));
-	lineOverlap = std::clamp(lineHeight / 10, 2, lineHeight);
+	// lineHeight may rarely be less than 2, so can't use std::clamp()
+	constexpr int overlapFraction = 10;	// Allow up to a tenth of a line overlap
+	lineOverlap = std::min(std::max(lineHeight / overlapFraction, 2), lineHeight);
 
 	bool flagProtected = false;
 	constexpr bool flagForceCase = false;
@@ -477,7 +486,7 @@ void ViewStyle::Refresh(Surface &surface, int tabInChars) {
 	tabWidth = aveCharWidth * tabInChars;
 
 	controlCharWidth = 0.0;
-	if (controlCharSymbol >= 32) {
+	if (controlCharSymbol >= ' ') {
 		const char cc[2] = { static_cast<char>(controlCharSymbol), '\0' };
 		controlCharWidth = surface.WidthText(styles[StyleControlChar].font.get(), cc);
 	}
@@ -487,7 +496,7 @@ void ViewStyle::Refresh(Surface &surface, int tabInChars) {
 }
 
 void ViewStyle::ReleaseAllExtendedStyles() noexcept {
-	nextExtendedStyle = 256;
+	nextExtendedStyle = startExtendedStyles;
 }
 
 int ViewStyle::AllocateExtendedStyles(int numberStyles) {
@@ -648,9 +657,8 @@ ColourOptional ViewStyle::Background(MarkerMask marksOfLine, bool caretActive, b
 	}
 	if (background) {
 		return background->Opaque();
-	} else {
-		return {};
 	}
+	return {};
 }
 
 bool ViewStyle::SelectionBackgroundDrawn() const noexcept {
