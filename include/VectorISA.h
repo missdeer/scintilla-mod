@@ -4,9 +4,11 @@
 
 #if defined(__clang__)
 #define NP2_align_up(value, alignment)		__builtin_align_up(value, alignment)
+#define NP2_align_down(value, alignment)	__builtin_align_down(value, alignment)
 #define NP2_is_aligned(value, alignment)	__builtin_is_aligned(value, alignment)
 #else
 #define NP2_align_up(value, alignment)		(((value) + (alignment) - 1) & ~((alignment) - 1))
+#define NP2_align_down(value, alignment)	((value) & ~((alignment) - 1))
 #define NP2_is_aligned(value, alignment)	(((value) & ((alignment) - 1)) == 0)
 #endif
 
@@ -178,9 +180,13 @@
 
 
 #if defined(__GNUC__) || defined(__clang__)
+#define bswap16(x)				__builtin_bswap16(x)
 #define bswap32(x)				__builtin_bswap32(x)
+#define bswap64(x)				__builtin_bswap64(x)
 #else
+#define bswap16(x)				_byteswap_ushort(x)
 #define bswap32(x)				_byteswap_ulong(x)
+#define bswap64(x)				_byteswap_uint64(x)
 #endif
 
 #if defined(__clang__)
