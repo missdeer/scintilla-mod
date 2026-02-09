@@ -116,10 +116,20 @@ Used by VSCode, Atom etc.
 #define SPI_GETWHEELSCROLLCHARS		0x006C
 #endif
 
+extern HANDLE g_hDefaultHeap;
+extern char *EditMapTextCase(int menu, const char *pszText, size_t &iSelCount, UINT cpEdit) noexcept;
+
 using namespace Scintilla;
 using namespace Scintilla::Internal;
 
 namespace {
+
+struct HeapPointerFreer {
+	template <typename T>
+	void operator()(T *ptr) const noexcept {
+		::HeapFree(g_hDefaultHeap, 0, ptr);
+	}
+};
 
 // Two idle messages SC_WIN_IDLE and SC_WORK_IDLE.
 
@@ -3299,6 +3309,14 @@ std::string ScintillaWin::CaseMapString(const std::string &s, CaseMapping caseMa
 		return s;
 
 	const UINT cpDoc = CodePageOfDocument();
+	if (caseMapping >= CaseMapping::custom) {
+		size_t length = s.length();
+		const std::unique_ptr<char, HeapPointerFreer> pszText{EditMapTextCase(static_cast<int>(caseMapping), s.c_str(), length, cpDoc)};
+		if (pszText) {
+			return {pszText.get(), length};
+		}
+		return s;
+	}
 	if (cpDoc == CpUtf8) {
 		return CaseConvertString(s, (caseMapping == CaseMapping::upper) ? CaseConversion::upper : CaseConversion::lower);
 	}
