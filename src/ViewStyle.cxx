@@ -448,13 +448,10 @@ void ViewStyle::Refresh(Surface &surface, int tabInChars) {
 
 	bool flagDynamic = false;
 	bool flagSetFore = false;
-	for (const auto &indicator : indicators) {
-		if (indicator.IsDynamic()) {
-			flagDynamic = true;
-		}
-		if (indicator.OverridesTextFore()) {
-			flagSetFore = true;
-		}
+	for (auto &indicator : indicators) {
+		indicator.Refresh();
+		flagDynamic |= indicator.IsDynamic();
+		flagSetFore |= indicator.OverridesTextFore();
 	}
 	indicatorsDynamic = flagDynamic;
 	indicatorsSetFore = flagSetFore;
@@ -499,14 +496,14 @@ void ViewStyle::ReleaseAllExtendedStyles() noexcept {
 	nextExtendedStyle = startExtendedStyles;
 }
 
-int ViewStyle::AllocateExtendedStyles(int numberStyles) {
+int ViewStyle::AllocateExtendedStyles(int numberStyles) noexcept {
 	const int startRange = nextExtendedStyle;
 	nextExtendedStyle += numberStyles;
 	EnsureStyle(nextExtendedStyle);
 	return startRange;
 }
 
-void ViewStyle::EnsureStyle([[maybe_unused]] size_t index) {
+void ViewStyle::EnsureStyle([[maybe_unused]] size_t index) const noexcept {
 #if 0 // we don't use extended style
 	const size_t i = styles.size();
 	if (index >= i) {
@@ -540,7 +537,7 @@ void ViewStyle::ClearStyles() noexcept {
 	styles[StyleCallTip].fore = ColourRGBA::Grey(mid);
 }
 
-void ViewStyle::CopyStyles(size_t sourceIndex, size_t destStyles) {
+void ViewStyle::CopyStyles(size_t sourceIndex, size_t destStyles) noexcept {
 	const size_t offset = sourceIndex >> 8;
 	sourceIndex &= 0xff;
 	const Style &source = styles[sourceIndex];

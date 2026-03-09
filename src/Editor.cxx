@@ -243,7 +243,7 @@ void Editor::InvalidateStyleData() noexcept {
 	view.posCache.Clear();
 }
 
-void Editor::InvalidateStyleRedraw() {
+void Editor::InvalidateStyleRedraw() noexcept {
 	NeedWrapping();
 	InvalidateStyleData();
 	Redraw();
@@ -1952,7 +1952,7 @@ void Editor::SetVerticalScrollPos() {
 }
 
 // Empty method is overridden on GTK to show / hide scrollbars
-void Editor::ReconfigureScrollBars() noexcept {}
+void Editor::ReconfigureScrollBars() const noexcept {}
 
 void Editor::SetScrollBars() {
 	RefreshStyleData();
@@ -2364,7 +2364,7 @@ void Editor::PasteRectangular(SelectionPosition pos, const char *ptr, Sci::Posit
 	SetEmptySelection(pos);
 }
 
-bool Editor::CanPaste() noexcept {
+bool Editor::CanPaste() const noexcept {
 	return !pdoc->IsReadOnly() && !SelectionContainsProtected();
 }
 
@@ -2529,7 +2529,10 @@ void Editor::DelCharBack(bool allowLineStartDeletion) {
 	ShowCaretAtCurrentPosition();
 }
 
-void Editor::NotifyFocus(bool focus) {
+// Windows/macOS does not have a primary selection
+void Editor::ClaimSelection() const noexcept {}
+
+void Editor::NotifyFocus(bool focus) const noexcept {
 	NotificationData scn = {};
 	scn.nmhdr.code = focus ? Notification::FocusIn : Notification::FocusOut;
 	NotifyParent(scn);
@@ -4182,40 +4185,37 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 		Sci::Position caretPosition = sel.Range(r).caret.Position();
 		const Sci::Line lineCurrentPos = pdoc->SciLineFromPosition(caretPosition);
 		if (lineOfAnchor == lineCurrentPos && !lineIndent) {
+			const int indentationStep = pdoc->IndentSize();
 			if (forwards) {
 				pdoc->DeleteChars(sel.Range(r).Start().Position(), sel.Range(r).Length());
 				caretPosition = sel.Range(r).caret.Position();
-				if (pdoc->tabIndents && pdoc->GetColumn(caretPosition) <= pdoc->GetColumn(pdoc->GetLineIndentPosition(lineCurrentPos))) {
-					const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
-					const int indentationStep = pdoc->IndentSize();
+				const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
+				const Sci::Position column = pdoc->GetColumn(caretPosition);
+				if (column <= indentation && pdoc->tabIndents) {
+					// Inside initial whitespace
 					const Sci::Position posSelect = pdoc->SetLineIndentation(
-						lineCurrentPos, indentation + indentationStep - indentation % indentationStep);
+						lineCurrentPos, indentation + indentationStep - (indentation % indentationStep));
 					sel.Range(r) = SelectionRange(posSelect);
 				} else {
 					if (pdoc->useTabs) {
-						const Sci::Position lengthInserted = pdoc->InsertString(caretPosition, "\t", 1);
+						const Sci::Position lengthInserted = pdoc->InsertString(caretPosition, "\t");
 						sel.Range(r) = SelectionRange(caretPosition + lengthInserted);
 					} else {
-						int numSpaces = (pdoc->tabInChars) -
-							static_cast<int>((pdoc->GetColumn(caretPosition) % (pdoc->tabInChars)));
-						if (numSpaces < 1)
-							numSpaces = pdoc->tabInChars;
+						const Sci::Position numSpaces = pdoc->tabInChars - (column % pdoc->tabInChars);
 						const std::string spaceText(numSpaces, ' ');
 						const Sci::Position lengthInserted = pdoc->InsertString(caretPosition, spaceText);
 						sel.Range(r) = SelectionRange(caretPosition + lengthInserted);
 					}
 				}
 			} else {
+				const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
 				const Sci::Position column = pdoc->GetColumn(caretPosition);
-				const int indentation = pdoc->tabIndents ? pdoc->GetLineIndentation(lineCurrentPos) : -1;
-				if (column <= indentation) {
-					const int indentationStep = pdoc->IndentSize();
+				if (column <= indentation && pdoc->tabIndents) {
 					const Sci::Position posSelect = pdoc->SetLineIndentation(lineCurrentPos, indentation - indentationStep);
 					sel.Range(r) = SelectionRange(posSelect);
 				} else {
-					Sci::Position newColumn = ((column - 1) / pdoc->tabInChars) *
-						pdoc->tabInChars;
-					newColumn = std::max<Sci::Position>(newColumn, 0);
+					const Sci::Position newColumn = std::max<Sci::Position>(0,
+						((column - 1) / pdoc->tabInChars) * pdoc->tabInChars);
 					Sci::Position newPos = caretPosition;
 					while (pdoc->GetColumn(newPos) > newColumn)
 						newPos--;
@@ -4255,7 +4255,7 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 	ContainerNeedsUpdate(Update::Selection);
 }
 
-std::unique_ptr<CaseFolder> Editor::CaseFolderForEncoding() {
+std::unique_ptr<CaseFolder> Editor::CaseFolderForEncoding() const {
 	// Simple default that only maps ASCII upper case to lower case.
 	return std::make_unique<CaseFolderTable>();
 }
@@ -4534,7 +4534,7 @@ void Editor::DisplayCursor(Window::Cursor c) noexcept {
 		wMain.SetCursor(static_cast<Window::Cursor>(cursorMode));
 }
 
-bool Editor::DragThreshold(Point ptStart, Point ptNow) noexcept {
+bool Editor::DragThreshold(Point ptStart, Point ptNow) const noexcept {
 	const Point ptDiff = ptStart - ptNow;
 	const XYPOSITION distanceSquared = ptDiff.x * ptDiff.x + ptDiff.y * ptDiff.y;
 	return distanceSquared > 16.0f;
@@ -5883,7 +5883,7 @@ Sci::Position Editor::GetTag(char *tagValue, int tagNumber) {
 	const char *text = nullptr;
 	Sci::Position length = 0;
 	if ((tagNumber >= 1) && (tagNumber <= 9)) {
-		char name[3];
+		char name[4];
 		name[0] = '\\';
 		name[1] = static_cast<char>(tagNumber + '0');
 		name[2] = '\0';
@@ -6090,6 +6090,18 @@ void Editor::StyleSetMessage(Message iMessage, uptr_t wParam, sptr_t lParam) {
 	}
 	case Message::StyleSetHotSpot:
 		vs.styles[wParam].hotspot = lParam != 0;
+		if (wParam == static_cast<uptr_t>(StylesCommon::Link)) {
+			const bool enabled = pdoc->EnableUrlHighlight();
+			constexpr int index = static_cast<int>(IndicatorNumbers::Link);
+			const IndicatorStyle style = enabled ? IndicatorStyle::TextFore : IndicatorStyle::Plain;
+			const ColourRGBA fore = vs.styles[wParam].fore;
+			Indicator &indicator = vs.indicators[index];
+			indicator.sacNormal.style = style;
+			indicator.sacNormal.fore = fore;
+			indicator.sacHover.style = style;
+			indicator.sacHover.fore = fore;
+			indicator.hoverUnderline = enabled;
+		}
 		break;
 	// case Message::StyleSetCheckMonospaced:
 	// 	vs.styles[wParam].checkMonospaced = lParam != 0;
@@ -6962,7 +6974,7 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		return static_cast<sptr_t>(vs.tabDrawMode);
 
 	case Message::SetTabDrawMode:
-		vs.tabDrawMode = static_cast<TabDrawMode>(wParam);
+		SetAppearance(vs.tabDrawMode, static_cast<TabDrawMode>(wParam));
 		Redraw();
 		break;
 
