@@ -1653,7 +1653,7 @@ bool Editor::WrapLines(WrapScope ws) {
 		const Sci::Line lineDocTop = pcs->DocFromDisplay(topLine);
 		LineDocSub lineScrollTo;
 		if (scrollToAfterWrap) {
-			lineScrollTo = scrollToAfterWrap.value();
+			lineScrollTo = *scrollToAfterWrap;
 		} else {
 			const Sci::Line subLineTop = topLine - pcs->DisplayFromDoc(lineDocTop);
 			lineScrollTo = { lineDocTop, subLineTop };
@@ -4930,7 +4930,7 @@ void Editor::ButtonDownWithModifiers(Point pt, unsigned int curTime, KeyMod modi
 						// Switch to just the click position
 						SetSelection(newPos, newPos);
 					}
-					if (!sel.Range(selectionPart).Empty()) {
+					if (dragDropEnabled && !sel.Range(selectionPart).Empty()) {
 						inDragDrop = DragDrop::initial;
 					}
 				}
