@@ -12,7 +12,7 @@ namespace Scintilla::Internal {
 
 struct Failure : public std::runtime_error {
 	Status status;
-	Failure(Status status_) : std::runtime_error("failure with status"), status(status_) {}
+	explicit Failure(Status status_) : std::runtime_error("failure with status"), status(status_) {}
 };
 
 // Interface to per-line data that wants to see each line insertion and deletion

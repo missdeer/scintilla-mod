@@ -18,7 +18,7 @@ public:
 	MarkerMask mask;
 	bool sensitive = false;
 	Scintilla::CursorShape cursor = Scintilla::CursorShape::ReverseArrow;
-	constexpr MarginStyle(Scintilla::MarginType style_ = Scintilla::MarginType::Symbol, int width_ = 0, MarkerMask mask_ = 0) noexcept:
+	explicit constexpr MarginStyle(Scintilla::MarginType style_ = Scintilla::MarginType::Symbol, int width_ = 0, MarkerMask mask_ = 0) noexcept:
 		style(style_), width(width_), mask(mask_) {}
 	constexpr bool ShowsFolding() const noexcept {
 		return (mask & Scintilla::MaskFolders) != 0;
@@ -198,7 +198,7 @@ public:
 
 	std::string localeName;
 
-	ViewStyle(size_t stylesSize_ = 256);
+	explicit ViewStyle(size_t stylesSize_ = 256);
 	ViewStyle(const ViewStyle &source);
 	ViewStyle(ViewStyle &&) = delete;
 	// Can only be copied through copy constructor which ensures font names initialised correctly

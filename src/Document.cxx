@@ -15,6 +15,8 @@
 #include <climits>
 
 #include <stdexcept>
+#include <new>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +25,7 @@
 #include <forward_list>
 #include <optional>
 #include <algorithm>
+#include <iterator>
 #include <memory>
 
 #include <windows.h>
@@ -1458,7 +1461,7 @@ int SCI_METHOD Document::AddData(const char *data, Sci_Position length) {
 	try {
 		const Sci::Position position = LengthNoExcept();
 		InsertString(position, data, length);
-	} catch (std::bad_alloc &) {
+	} catch (const std::bad_alloc &) {
 		return static_cast<int>(Status::BadAlloc);
 	} catch (...) {
 		return static_cast<int>(Status::Failure);
@@ -1530,7 +1533,7 @@ Sci::Position Document::Undo() {
 						modFlags |= ModificationFlags::MultilineUndoRedo;
 				}
 				NotifyModified(DocModification(modFlags, action.position, action.lenData,
-					linesAdded, action.data));
+					linesAdded, action.data, 0, newPos));
 			}
 
 			const bool endSavePoint = cb.IsSavePoint();
@@ -1590,7 +1593,7 @@ Sci::Position Document::Redo() {
 				}
 				NotifyModified(
 					DocModification(modFlags, action.position, action.lenData,
-						linesAdded, action.data));
+						linesAdded, action.data, 0, newPos));
 			}
 
 			const bool endSavePoint = cb.IsSavePoint();
@@ -1828,13 +1831,13 @@ constexpr std::string_view EOLForMode(EndOfLine eolMode) noexcept {
 
 // Convert line endings for a piece of text to a particular mode.
 // Stop at len or when a NUL is found.
-std::string Document::TransformLineEnds(const char *s, size_t len, EndOfLine eolModeWanted) {
+std::string Document::TransformLineEnds(std::string_view s, EndOfLine eolModeWanted) {
 	std::string dest;
 	const std::string_view eol = EOLForMode(eolModeWanted);
-	for (size_t i = 0; (i < len) && (s[i]); i++) {
+	for (size_t i = 0; (i < s.length()) && (s[i]); i++) {
 		if (IsEOLCharacter(s[i])) {
 			dest.append(eol);
-			if ((s[i] == '\r') && (i + 1 < len) && (s[i + 1] == '\n')) {
+			if ((s[i] == '\r') && (i + 1 < s.length()) && (s[i + 1] == '\n')) {
 				i++;
 			}
 		} else {
