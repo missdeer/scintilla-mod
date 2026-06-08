@@ -49,9 +49,8 @@ private:
 	Sci::Line lineNumber;
 	int lenLineStarts = 0;
 public:
-	enum {
-		wrapWidthInfinite = 0x7ffffff
-	};
+	static constexpr int wrapWidthMinimum = 20;
+	static constexpr int wrapWidthInfinite = 0x7ffffff;
 
 	int maxLineLength = -1;
 	int lastSegmentEnd = 0;
@@ -151,7 +150,7 @@ struct SignificantLines {
 	Sci::Line linesTotal;
 	int styleClock;
 	Scintilla::LineCache level;
-	bool LineMayCache(Sci::Line line) const noexcept;
+	bool LineMayCache(Sci::Line line, unsigned maxChars) const noexcept;
 };
 
 /**
@@ -210,6 +209,7 @@ class Representation {
 public:
 	// for Unicode control or format characters in hex code form
 	static constexpr size_t maxLength = 7;
+	static constexpr int maxByteLength = 3; // C0 control or hex code
 	char stringRep[maxLength + 1]{};
 	size_t length;
 	RepresentationAppearance appearance = RepresentationAppearance::Blob;
@@ -313,6 +313,7 @@ public:
 };
 
 constexpr size_t positionCacheDefaultSize = 0x400;
+constexpr unsigned positionCacheUnicode = 1 << 16;
 
 class PositionCache {
 	std::vector<PositionCacheEntry> pces { positionCacheDefaultSize };

@@ -364,7 +364,7 @@ inline void UpdateMaximum(std::atomic<T> &maximum, const T &value) noexcept {
 struct LayoutWorker {
 	LineLayout * const ll;
 	const ViewStyle &vstyle;
-	Surface * const sharedSurface;
+	Surface * const surface;
 	PositionCache &posCache;
 	const EditModel &model;
 
@@ -378,7 +378,7 @@ struct LayoutWorker {
 
 	static constexpr int blockSize = EditModel::ParallelLayoutBlockSize;
 
-	void Layout(const TextSegment &ts, Surface *surface) {
+	void Layout(const TextSegment &ts) {
 		const unsigned char styleSegment = ll->styles[ts.start];
 		const Style &style = vstyle.styles[styleSegment];
 		XYPOSITION * const positions = &ll->positions[ts.start + 1];
@@ -396,7 +396,7 @@ struct LayoutWorker {
 							// ts.representation->stringRep is UTF-8.
 							std::array<XYPOSITION, Representation::maxLength + 1> positionsRepr;
 							const std::string_view stringRep = ts.representation->GetStringRep();
-							posCache.MeasureWidths(surface, styleCtrl, StyleControlChar | (1 << 16), stringRep, positionsRepr.data());
+							posCache.MeasureWidths(surface, styleCtrl, StyleControlChar | positionCacheUnicode, stringRep, positionsRepr.data());
 							representationWidth = positionsRepr[ts.representation->length - 1];
 						}
 						if (FlagSet(ts.representation->appearance, RepresentationAppearance::Blob)) {
@@ -420,7 +420,7 @@ struct LayoutWorker {
 			const std::string_view text = style.GetInvisibleRepresentation();
 			std::array<XYPOSITION, Representation::maxLength + 1> positionsRepr;
 			// invisibleRepresentation is UTF-8.
-			posCache.MeasureWidths(surface, style, styleSegment | (1 << 16), text, positionsRepr.data());
+			posCache.MeasureWidths(surface, style, styleSegment | positionCacheUnicode, text, positionsRepr.data());
 			const XYPOSITION representationWidth = positionsRepr[text.length() - 1];
 			for (int ii = 0; ii < ts.length; ii++) {
 				positions[ii] = representationWidth;
@@ -429,10 +429,10 @@ struct LayoutWorker {
 	}
 
 	uint32_t Start(Sci::Position posLineStart, uint32_t posInLine, LayoutLineOption option) {
-		textUnicode = (model.pdoc->dbcsCodePage & (1 << 15)) << 1;
+		textUnicode = (model.pdoc->dbcsCodePage & (positionCacheUnicode >> 1)) << 1;
 		const int startPos = ll->lastSegmentEnd;
 		const int endPos = ll->numCharsInLine;
-		if (endPos - startPos > blockSize*2 && !model.BidirectionalEnabled()) {
+		if (option < LayoutLineOption::CallerMultiThreaded && endPos - startPos > blockSize*2 && !model.BidirectionalEnabled()) {
 			posInLine = std::max<uint32_t>(posInLine, std::max(startPos, ll->caretPosition)) + blockSize;
 			if (static_cast<int>(endPos - posInLine) < blockSize) {
 				posInLine = endPos;
@@ -451,7 +451,7 @@ struct LayoutWorker {
 
 		maxPosInLine = static_cast<int>(posInLine);
 		const uint32_t length = bfLayout.CurrentPos() - startPos;
-		if (length >= model.minParallelLayoutLength && model.hardwareConcurrency > 1) {
+		if (!FlagSet(option, LayoutLineOption::CallerMultiThreaded) && length >= model.minParallelLayoutLength && model.hardwareConcurrency > 1) {
 			segmentCount = static_cast<uint32_t>(segmentList.size());
 			const uint32_t threadCount = std::min(length/(blockSize/2), model.hardwareConcurrency);
 #if USE_STD_ASYNC_FUTURE
@@ -477,12 +477,11 @@ struct LayoutWorker {
 		}
 
 		void * const idleTaskTimer = model.idleTaskTimer;
-		Surface * const surface = sharedSurface;
 		int processed = 0;
 		auto it = segmentList.begin();
 		while (true) {
 			const TextSegment &ts = *it++;
-			Layout(ts, surface);
+			Layout(ts);
 			if (it == segmentList.end()) {
 				break;
 			}
@@ -499,22 +498,9 @@ struct LayoutWorker {
 		return 1;
 	}
 
-	std::unique_ptr<Surface> CreateMeasurementSurface() const {
-		// if (!surface->SupportsFeature(Supports::ThreadSafeMeasureWidths))
-		if (vstyle.technology == Technology::Default) {
-			std::unique_ptr<Surface> surf = Surface::Allocate(Technology::Default);
-			surf->Init(nullptr);
-			surf->SetMode(model.CurrentSurfaceMode());
-			return surf;
-		}
-		return {};
-	}
-
 	void DoWork() {
 		uint32_t finished = 0;
 		void * const idleTaskTimer = model.idleTaskTimer;
-		const std::unique_ptr<Surface> surf{CreateMeasurementSurface()};
-		Surface * const surface = surf ? surf.get() : sharedSurface;
 
 		int processed = 0;
 		while (true) {
@@ -524,7 +510,7 @@ struct LayoutWorker {
 			}
 
 			const TextSegment &ts = segmentList[index];
-			Layout(ts, surface);
+			Layout(ts);
 			finished = index + 1;
 			processed += ts.length;
 			if (processed >= blockSize) {
@@ -562,8 +548,7 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 	// If the line is very long, limit the treatment to a length that should fit in the viewport
 	const Sci::Position posLineEnd = std::min(model.pdoc->LineStart(line + 1), posLineStart + ll->maxLineLength);
 	// Hard to cope when too narrow, so just assume there is space
-	constexpr int minimumWidth = 20;
-	width = std::max(width, minimumWidth);
+	width = std::max(width, LineLayout::wrapWidthMinimum);
 
 	auto validity = ll->validity;
 	if (validity == LineLayout::ValidLevel::checkTextAndStyle) {
