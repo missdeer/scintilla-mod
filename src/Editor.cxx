@@ -3369,31 +3369,26 @@ void Editor::ChangeCaseOfSelection(CaseMapping caseMapping) {
 		const size_t rangeBytes = currentNoVS.Length();
 		if (rangeBytes > 0 /*&& !RangeContainsProtected(currentNoVS)*/) {
 			const std::string sText = RangeText(currentNoVS.Start().Position(), currentNoVS.End().Position());
-
 			const std::string sMapped = CaseMapString(sText, caseMapping);
-
-			if (sMapped != sText) {
+			std::string_view text = sText;
+			std::string_view mapped = sMapped;
+			if (mapped != text) {
 				size_t firstDifference = 0;
-				while (sMapped[firstDifference] == sText[firstDifference]) {
+				// similar to Document::TrimReplacement()
+				while (!mapped.empty() && !text.empty() && mapped.front() == text.front()) {
 					firstDifference++;
+					text.remove_prefix(1);
+					mapped.remove_prefix(1);
 				}
-				size_t lastDifferenceText = sText.size() - 1;
-				size_t lastDifferenceMapped = sMapped.size() - 1;
-				while (sMapped[lastDifferenceMapped] == sText[lastDifferenceText]) {
-					lastDifferenceText--;
-					lastDifferenceMapped--;
+				while (!mapped.empty() && !text.empty() && mapped.back() == text.back()) {
+					text.remove_suffix(1);
+					mapped.remove_suffix(1);
 				}
-				const size_t endDifferenceText = sText.size() - 1 - lastDifferenceText;
-				pdoc->DeleteChars(
-					currentNoVS.Start().Position() + firstDifference,
-					rangeBytes - firstDifference - endDifferenceText);
-				const Sci::Position lengthChange = lastDifferenceMapped - firstDifference + 1;
-				const Sci::Position lengthInserted = pdoc->InsertString(
-					currentNoVS.Start().Position() + firstDifference,
-					sMapped.c_str() + firstDifference,
-					lengthChange);
+				const Sci::Position insertPos = currentNoVS.Start().Position() + firstDifference;
+				pdoc->DeleteChars(insertPos, text.length());
+				const Sci::Position lengthInserted = pdoc->InsertString(insertPos, mapped);
 				// Automatic movement changes selection so reset to exactly the same as it was.
-				const Sci::Position diffSizes = sMapped.size() - sText.size() + lengthInserted - lengthChange;
+				const Sci::Position diffSizes = lengthInserted - text.length();
 				if (diffSizes != 0) {
 					if (current.anchor > current.caret)
 						current.anchor.Add(diffSizes);
@@ -5371,38 +5366,10 @@ void Editor::ButtonUpWithModifiers(Point pt, unsigned int curTime, KeyMod modifi
 		ChangeMouseCapture(false);
 		NotifyIndicatorClick(false, newPos.Position(), modifiers);
 		if (inDragDrop == DragDrop::dragging) {
-			const SelectionPosition selStart = SelectionStart();
-			const SelectionPosition selEnd = SelectionEnd();
-			if (selStart < selEnd) {
-				if (const Sci::Position length = drag.Length()) {
-					if (FlagSet(modifiers, KeyMod::Ctrl)) {
-						const Sci::Position lengthInserted = pdoc->InsertString(
-							newPos.Position(), drag.Data(), length);
-						if (lengthInserted > 0) {
-							SetSelection(newPos.Position(), newPos.Position() + lengthInserted);
-						}
-					} else if (newPos < selStart) {
-						pdoc->DeleteChars(selStart.Position(), drag.Length());
-						const Sci::Position lengthInserted = pdoc->InsertString(
-							newPos.Position(), drag.Data(), length);
-						if (lengthInserted > 0) {
-							SetSelection(newPos.Position(), newPos.Position() + lengthInserted);
-						}
-					} else if (newPos > selEnd) {
-						pdoc->DeleteChars(selStart.Position(), drag.Length());
-						newPos.Add(-static_cast<Sci::Position>(drag.Length()));
-						const Sci::Position lengthInserted = pdoc->InsertString(
-							newPos.Position(), drag.Data(), length);
-						if (lengthInserted > 0) {
-							SetSelection(newPos.Position(), newPos.Position() + lengthInserted);
-						}
-					} else {
-						SetEmptySelection(newPos.Position());
-					}
-					drag.Clear();
-				}
-				selectionUnit = TextUnit::character;
-			}
+			// This is a backup version of text drop for when StartDrag is not implemented for the platform.
+			DropAt(newPos, drag.AsView(), !FlagSet(modifiers, KeyMod::Ctrl), drag.rectangular);
+			drag.Clear();
+			selectionUnit = TextUnit::character;
 		} else {
 			if (selectionUnit == TextUnit::character) {
 				if (sel.Count() > 1) {
@@ -7574,6 +7541,9 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		break;
 
 	case Message::GetCodePage:
+		if (wParam) {
+			return AsInteger<sptr_t>(pdoc->GetDBCSByteMask());
+		}
 		return pdoc->dbcsCodePage;
 
 	case Message::SetIMEInteraction:
