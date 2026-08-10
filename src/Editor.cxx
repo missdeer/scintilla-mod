@@ -4446,7 +4446,10 @@ Sci::Position Editor::FindTextFull(
 
 	TextToFindFull *ft = AsPointer<TextToFindFull *>(lParam);
 #if 1
-	Sci::Position lengthFound = strlen(ft->lpstrText);
+	Sci::Position lengthFound = ft->textLength;
+	if (lengthFound <= 0) {
+		lengthFound = strlen(ft->lpstrText);
+	}
 	if (!pdoc->HasCaseFolder())
 		pdoc->SetCaseFolder(CaseFolderForEncoding());
 	try {
@@ -4473,7 +4476,10 @@ Sci::Position Editor::FindTextFull(
 	const ElapsedPeriod period;
 	uint32_t count = 0;
 	while (true) {
-		Sci::Position lengthFound = strlen(ft->lpstrText);
+		Sci::Position lengthFound = ft->textLength;
+		if (lengthFound <= 0) {
+			lengthFound = strlen(ft->lpstrText);
+		}
 		if (!pdoc->HasCaseFolder())
 			pdoc->SetCaseFolder(CaseFolderForEncoding());
 		try {
@@ -6024,11 +6030,10 @@ void Editor::NeedShown(Sci::Position pos, Sci::Position len) {
 Sci::Position Editor::GetTag(char *tagValue, int tagNumber) {
 	const char *text = nullptr;
 	Sci::Position length = 0;
-	if ((tagNumber >= 1) && (tagNumber <= 9)) {
-		char name[4];
+	if ((tagNumber >= 0) && (tagNumber <= 9)) {
+		char name[4]{};
 		name[0] = '\\';
 		name[1] = static_cast<char>(tagNumber + '0');
-		name[2] = '\0';
 		length = 2;
 		text = pdoc->SubstituteByPosition(name, &length);
 	}
@@ -6671,7 +6676,7 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 	case Message::ReplaceTarget:
 	case Message::ReplaceTargetRE:
 	case Message::ReplaceTargetMinimal:
-		PLATFORM_ASSERT(lParam);
+		PLATFORM_ASSERT(lParam != 0 || (wParam | lParam) == 0);
 		return ReplaceTarget(iMessage, wParam, lParam);
 
 	case Message::SearchInTarget:
@@ -7542,7 +7547,7 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 
 	case Message::GetCodePage:
 		if (wParam) {
-			return AsInteger<sptr_t>(pdoc->GetDBCSByteMask());
+			*AsPointer<const DBCSByteMask **>(wParam) = pdoc->GetDBCSByteMask();
 		}
 		return pdoc->dbcsCodePage;
 
