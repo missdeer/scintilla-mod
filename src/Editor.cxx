@@ -562,6 +562,10 @@ void Editor::InvalidateRange(Sci::Position start, Sci::Position end) noexcept {
 	RedrawRect(RectangleFromRange(Range(start, end), view.LinesOverlap() ? vs.lineOverlap : 0));
 }
 
+void Editor::InvalidateRange(ForwardRange range) noexcept {
+	InvalidateRange(range.First(), range.Last());
+}
+
 Sci::Position Editor::CurrentPosition() const noexcept {
 	return sel.MainCaret();
 }
@@ -2633,7 +2637,7 @@ bool Editor::BackspaceUnindent(Sci::Position lineCurrentPos, Sci::Position caret
 			indentationChange = indentationStep;
 		}
 		if (column <= indentation && (pdoc->backspaceUnindents & 1)) {
-			//const UndoGroup ugInner(pdoc, !ug.Needed());
+			//const UndoGroup ugInner(pdoc);
 			*posSelect = pdoc->SetLineIndentation(lineCurrentPos, indentation - indentationChange);
 			return true;
 		}
@@ -2665,8 +2669,8 @@ void Editor::DelCharBack(bool allowLineStartDeletion) {
 		for (size_t r = 0; r < sel.Count(); r++) {
 			const Sci::Position caretPosition = sel.Range(r).caret.Position();
 			if (!RangeContainsProtected(caretPosition - 1, caretPosition)) {
-				if (sel.Range(r).caret.VirtualSpace()) {
-					sel.Range(r).caret.SetVirtualSpace(sel.Range(r).caret.VirtualSpace() - 1);
+				if (const Sci::Position virtualSpace = sel.Range(r).caret.VirtualSpace()) {
+					sel.Range(r).caret.SetVirtualSpace(virtualSpace - 1);
 					sel.Range(r).anchor.SetVirtualSpace(sel.Range(r).caret.VirtualSpace());
 				} else {
 					const Sci::Line lineCurrentPos = pdoc->SciLineFromPosition(caretPosition);
@@ -3824,7 +3828,8 @@ SelectionPosition Editor::PositionMove(Message iMessage, SelectionPosition spCar
 	case Message::CharLeftExtend:
 		if (spCaret.VirtualSpace()) {
 			spCaret.AddVirtualSpace(-1);
-		} else if (!FlagSet(virtualSpaceOptions, VirtualSpace::NoWrapLineStart) || pdoc->GetColumn(spCaret.Position()) > 0) {
+		} else if (!FlagSet(virtualSpaceOptions, VirtualSpace::NoWrapLineStart) ||
+			!pdoc->IsLineStartPosition(spCaret.Position())) {
 			spCaret.Add(-1);
 		}
 		return spCaret;
@@ -3965,7 +3970,8 @@ int Editor::HorizontalMove(Message iMessage) {
 		case Message::CharLeftExtend: // only when sel.IsRectangular() && sel.MoveExtends()
 			if (pdoc->IsLineEndPosition(spCaret.Position()) && spCaret.VirtualSpace()) {
 				spCaret.SetVirtualSpace(spCaret.VirtualSpace() - 1);
-			} else if (!FlagSet(virtualSpaceOptions, VirtualSpace::NoWrapLineStart) || pdoc->GetColumn(spCaret.Position()) > 0) {
+			} else if (!FlagSet(virtualSpaceOptions, VirtualSpace::NoWrapLineStart) ||
+				!pdoc->IsLineStartPosition(spCaret.Position())) {
 				spCaret = SelectionPosition(spCaret.Position() - 1);
 			}
 			break;
@@ -4360,10 +4366,10 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 		sel.selType = Selection::SelTypes::stream;
 	}
 	for (size_t r = 0; r < sel.Count(); r++) {
-		const Sci::Line lineOfAnchor =
-			pdoc->SciLineFromPosition(sel.Range(r).anchor.Position());
+		const Sci::Position anchorPosition = sel.Range(r).anchor.Position();
+		Sci::Line lineOfAnchor = pdoc->SciLineFromPosition(anchorPosition);
 		Sci::Position caretPosition = sel.Range(r).caret.Position();
-		const Sci::Line lineCurrentPos = pdoc->SciLineFromPosition(caretPosition);
+		Sci::Line lineCurrentPos = pdoc->SciLineFromPosition(caretPosition);
 		if (lineOfAnchor == lineCurrentPos && !lineIndent) {
 			const int indentationStep = pdoc->IndentSize();
 			if (forwards) {
@@ -4396,38 +4402,33 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 				} else {
 					const Sci::Position newColumn = std::max<Sci::Position>(0,
 						((column - 1) / pdoc->tabInChars) * pdoc->tabInChars);
-					Sci::Position newPos = caretPosition;
-					while (pdoc->GetColumn(newPos) > newColumn)
-						newPos--;
+					const Sci::Position newPos = pdoc->FindColumn(lineCurrentPos, newColumn);
 					sel.Range(r) = SelectionRange(newPos);
 				}
 			}
 		} else {	// Multiline or LineIndent
-			const Sci::Position anchorPosOnLine = sel.Range(r).anchor.Position() -
+			const Sci::Position anchorPosOnLine = anchorPosition -
 				pdoc->LineStart(lineOfAnchor);
 			const Sci::Position currentPosPosOnLine = caretPosition -
 				pdoc->LineStart(lineCurrentPos);
 			// Multiple lines selected so indent / dedent
 			const Sci::Line lineTopSel = std::min(lineOfAnchor, lineCurrentPos);
 			Sci::Line lineBottomSel = std::max(lineOfAnchor, lineCurrentPos);
-			if (pdoc->LineStart(lineBottomSel) == sel.Range(r).anchor.Position() || pdoc->LineStart(lineBottomSel) == caretPosition)
+			const Sci::Position lineStart = pdoc->LineStart(lineBottomSel);
+			if (lineStart == anchorPosition || lineStart == caretPosition)
 				lineBottomSel--;  	// If not selecting any characters on a line, do not indent
 			pdoc->Indent(forwards, lineBottomSel, lineTopSel);
 			if (lineOfAnchor < lineCurrentPos) {
-				if (currentPosPosOnLine == 0)
-					sel.Range(r) = SelectionRange(pdoc->LineStart(lineCurrentPos),
-						pdoc->LineStart(lineOfAnchor));
-				else
-					sel.Range(r) = SelectionRange(pdoc->LineStart(lineCurrentPos + 1),
-						pdoc->LineStart(lineOfAnchor));
+				if (currentPosPosOnLine != 0) {
+					lineCurrentPos += 1;
+				}
 			} else {
-				if (anchorPosOnLine == 0)
-					sel.Range(r) = SelectionRange(pdoc->LineStart(lineCurrentPos),
-						pdoc->LineStart(lineOfAnchor));
-				else
-					sel.Range(r) = SelectionRange(pdoc->LineStart(lineCurrentPos),
-						pdoc->LineStart(lineOfAnchor + 1));
+				if (anchorPosOnLine != 0) {
+					lineOfAnchor += 1;
+				}
 			}
+			sel.Range(r) = SelectionRange(pdoc->LineStart(lineCurrentPos),
+				pdoc->LineStart(lineOfAnchor));
 		}
 	}
 	sel.selType = selType;	// Restore rectangular mode
@@ -4953,7 +4954,7 @@ void Editor::DwellEnd(bool mouseMoved) {
 }
 
 void Editor::MouseLeave() {
-	SetHotSpotRange(nullptr);
+	ClearHotSpotRange();
 	SetHoverIndicatorPosition(Sci::invalidPosition);
 	if (!HaveMouseCapture()) {
 		ptMouseLast = Point(-1, -1);
@@ -5194,30 +5195,30 @@ void Editor::SetHoverIndicatorPoint(Point pt) {
 	}
 }
 
-void Editor::SetHotSpotRange(const Point *pt) {
-	if (pt) {
-		const Sci::Position pos = PositionFromLocation(*pt, false, true);
+void Editor::ClearHotSpotRange() noexcept {
+	if (!hotspot.Empty()) {
+		InvalidateRange(hotspot);
+	}
+	hotspot = {};
+}
 
-		// If we don't limit this to word characters then the
-		// range can encompass more than the run range and then
-		// the underline will not be drawn properly.
-		Range hsNew;
-		hsNew.start = pdoc->ExtendStyleRange(pos, -1, hotspotSingleLine);
-		hsNew.end = pdoc->ExtendStyleRange(pos, 1, hotspotSingleLine);
+void Editor::SetHotSpotRange(Point pt) {
+	const Sci::Position pos = PositionFromLocation(pt, false, true);
 
-		// Only invalidate the range if the hotspot range has changed...
-		if (!(hsNew == hotspot)) {
-			if (hotspot.Valid()) {
-				InvalidateRange(hotspot.start, hotspot.end);
-			}
-			hotspot = hsNew;
-			InvalidateRange(hotspot.start, hotspot.end);
+	// If we don't limit this to word characters then the
+	// range can encompass more than the run range and then
+	// the underline will not be drawn properly.
+	const ForwardRange hsNew(
+		pdoc->ExtendStyleRange(pos, -1, hotspotSingleLine),
+		pdoc->ExtendStyleRange(pos, 1, hotspotSingleLine));
+
+	// Only invalidate the range if the hotspot range has changed...
+	if (!(hsNew == hotspot)) {
+		if (!hotspot.Empty()) {
+			InvalidateRange(hotspot);
 		}
-	} else {
-		if (hotspot.Valid()) {
-			InvalidateRange(hotspot.start, hotspot.end);
-		}
-		hotspot = Range(Sci::invalidPosition);
+		hotspot = hsNew;
+		InvalidateRange(hotspot);
 	}
 }
 
@@ -5308,8 +5309,8 @@ void Editor::ButtonMoveWithModifiers(Point pt, unsigned int, KeyMod modifiers) {
 		}
 		EnsureCaretVisible(false, false, true);
 
-		if (hotspot.Valid() && !PointIsHotspot(pt))
-			SetHotSpotRange(nullptr);
+		if (!hotspot.Empty() && !PointIsHotspot(pt))
+			ClearHotSpotRange();
 
 		if (hotSpotClickPos != Sci::invalidPosition && PositionFromLocation(pt, true, true) != hotSpotClickPos) {
 			if (inDragDrop == DragDrop::none) {
@@ -5322,7 +5323,7 @@ void Editor::ButtonMoveWithModifiers(Point pt, unsigned int, KeyMod modifiers) {
 		if (vs.fixedColumnWidth > 0) {	// There is a margin
 			if (PointInSelMargin(pt)) {
 				DisplayCursor(GetMarginCursor(pt));
-				SetHotSpotRange(nullptr);
+				ClearHotSpotRange();
 				SetHoverIndicatorPosition(Sci::invalidPosition);
 				return; 	// No need to test for selection
 			}
@@ -5335,13 +5336,13 @@ void Editor::ButtonMoveWithModifiers(Point pt, unsigned int, KeyMod modifiers) {
 			SetHoverIndicatorPoint(pt);
 			if (PointIsHotspot(pt)) {
 				DisplayCursor(Window::Cursor::hand);
-				SetHotSpotRange(&pt);
+				SetHotSpotRange(pt);
 			} else {
 				if (hoverIndicatorPos != Sci::invalidPosition)
 					DisplayCursor(Window::Cursor::hand);
 				else
 					DisplayCursor(Window::Cursor::text);
-				SetHotSpotRange(nullptr);
+				ClearHotSpotRange();
 			}
 		}
 	}
@@ -5371,7 +5372,7 @@ void Editor::ButtonUpWithModifiers(Point pt, unsigned int curTime, KeyMod modifi
 			DisplayCursor(GetMarginCursor(pt));
 		} else {
 			DisplayCursor(Window::Cursor::text);
-			SetHotSpotRange(nullptr);
+			ClearHotSpotRange();
 		}
 		ptMouseLast = pt;
 		ChangeMouseCapture(false);
@@ -5707,7 +5708,7 @@ void Editor::SetDocPointer(Document *document) {
 	view.llc.Deallocate();
 	NeedWrapping();
 
-	hotspot = Range(Sci::invalidPosition);
+	hotspot = {};
 	hoverIndicatorPos = Sci::invalidPosition;
 
 	view.ClearAllTabstops();
@@ -6599,26 +6600,14 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		}
 
 	case Message::LineFromPosition:
-		if (PositionFromUPtr(wParam) < 0)
-			return 0;
 		return pdoc->SciLineFromPosition(PositionFromUPtr(wParam));
 
 	case Message::PositionFromLine:
-		if (PositionFromUPtr(wParam) < 0)
-			wParam = pdoc->SciLineFromPosition(SelectionStart().Position());
-		if (wParam == 0)
-			return 0; 	// Even if there is no text, there is a first line that starts at 0
-		if (LineFromUPtr(wParam) > pdoc->LinesTotal())
-			return -1;
-		//if (wParam > pdoc->SciLineFromPosition(pdoc->LengthNoExcept()))	// Useful test, anyway...
-		//	return -1;
+		// not compatible with EM_LINEINDEX
 		return pdoc->LineStart(LineFromUPtr(wParam));
 
 		// Replacement of the old Scintilla interpretation of EM_LINELENGTH
 	case Message::LineLength:
-		if (LineFromUPtr(wParam) < 0 ||
-		        LineFromUPtr(wParam) > pdoc->SciLineFromPosition(pdoc->LengthNoExcept()))
-			return 0;
 		return pdoc->LineStart(LineFromUPtr(wParam) + 1) - pdoc->LineStart(LineFromUPtr(wParam));
 
 	case Message::ReplaceSel: {
@@ -6710,14 +6699,10 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		return pdoc->MovePositionOutsideChar(PositionFromUPtr(wParam) + 1, 1, true);
 
 	case Message::PositionRelative:
-		return std::clamp<Sci::Position>(pdoc->GetRelativePosition(
-			PositionFromUPtr(wParam), lParam),
-			0, pdoc->LengthNoExcept());
+		return pdoc->GetRelativePosition(PositionFromUPtr(wParam), lParam);
 
 	case Message::PositionRelativeCodeUnits:
-		return std::clamp<Sci::Position>(pdoc->GetRelativePositionUTF16(
-			PositionFromUPtr(wParam), lParam),
-			0, pdoc->LengthNoExcept());
+		return pdoc->GetRelativePositionUTF16(PositionFromUPtr(wParam), lParam);
 
 	case Message::LineScroll:
 		ScrollTo(topLine + lParam);

@@ -382,7 +382,7 @@ struct LayoutWorker {
 	void Layout(const TextSegment &ts) {
 		const unsigned char styleSegment = ll->styles[ts.start];
 		const Style &style = vstyle.styles[styleSegment];
-		XYPOSITION * const positions = &ll->positions[ts.start + 1];
+		XYPOSITION * const positions = ll->PositionsFor(ts.start + 1);
 		if (style.visible) {
 			if (ts.representation) {
 				if (ll->chars[ts.start] != '\t' || vstyle.tabDrawMode == TabDrawMode::ControlChar) {
@@ -445,7 +445,7 @@ struct LayoutWorker {
 			posInLine = endPos;
 		}
 
-		BreakFinder bfLayout(ll, nullptr, Range(startPos, endPos), posLineStart, 0, BreakFinder::BreakFor::Layout, model, nullptr, posInLine);
+		BreakFinder bfLayout(ll, nullptr, ForwardRange(startPos, endPos), posLineStart, 0, BreakFinder::BreakFor::Layout, model, nullptr, posInLine);
 		do {
 			segmentList.push_back(bfLayout.Next());
 		} while (bfLayout.More());
@@ -606,9 +606,7 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 			validity = LineLayout::ValidLevel::lines;
 		} else if (vstyle.edgeState == EdgeVisualStyle::Background) {
 			Sci::Position edgePosition = model.pdoc->FindColumn(line, vstyle.theEdge.column);
-			if (edgePosition >= posLineStart) {
-				edgePosition -= posLineStart;
-			}
+			edgePosition -= posLineStart;
 			ll->edgeColumn = static_cast<int>(edgePosition);
 		}
 	}
@@ -626,6 +624,7 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 		const uint32_t threadCount = worker.Start(posLineStart, posInLine, option);
 
 		// Accumulate absolute positions from relative positions within segments and expand tabs
+		// ll->CalculatePositions(line, *this, vstyle);
 		const uint32_t finishedCount = worker.finishedCount.load(std::memory_order_relaxed);
 		uint32_t iByte = ll->lastSegmentEnd;
 		XYPOSITION xPosition = ll->positions[iByte++];
@@ -673,7 +672,7 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 		ll->widthLine = width;
 		if (width == LineLayout::wrapWidthInfinite) {
 			ll->lines = 1;
-		} else if (width > ll->positions[ll->lastSegmentEnd]) {
+		} else if (width > ll->GetPosition(ll->lastSegmentEnd)) {
 			// Simple common case where line does not need wrapping.
 			ll->lines = 1;
 		} else {
@@ -700,13 +699,13 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 			if (vstyle.wrap.indentMode != WrapIndentMode::Fixed) {
 				for (int i = 0; i < ll->lastSegmentEnd; i++) {
 					if (!IsSpaceOrTab(ll->chars[i])) {
-						wrapIndent += ll->positions[i]; // Add line indent
+						wrapIndent += ll->GetPosition(i); // Add line indent
 						break;
 					}
 				}
 			}
 			// Check for text width minimum
-			if (wrapIndent > width - static_cast<int>(aveCharWidth) * 15) {
+			if (wrapIndent > width - (static_cast<int>(aveCharWidth) * 15)) {
 				wrapIndent = wrapAddIndent;
 			}
 			// Check for wrapIndent minimum
@@ -717,7 +716,7 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 			ll->WrapLine(model.pdoc, posLineStart, vstyle.wrap.state, width, wrapIndent, partialLine);
 			//const double duration = period.Duration()*1e3;
 			//printf("wrap line=%zd(%d)%d duration=%f, lines=%d, %.0f/%d\n", line + 1, ll->lastSegmentEnd,
-			//	static_cast<int>(vstyle.wrap.state), duration, ll->lines, ll->positions[ll->lastSegmentEnd], width);
+			//	static_cast<int>(vstyle.wrap.state), duration, ll->lines, ll->GetPosition(ll->lastSegmentEnd), width);
 		}
 
 		validity = LineLayout::ValidLevel::lines;
@@ -746,7 +745,7 @@ void EditView::UpdateBidiData(const EditModel &model, const ViewStyle &vstyle, L
 
 			ll->bidiData->widthReprs[charsInLine] = 0.0f;
 			if (repr && ll->chars[charsInLine] != '\t' && vstyle.tabDrawMode != TabDrawMode::ControlChar) {
-				ll->bidiData->widthReprs[charsInLine] = ll->positions[charsInLine + charWidth] - ll->positions[charsInLine];
+				ll->bidiData->widthReprs[charsInLine] = ll->GetWidth(charsInLine + charWidth, charsInLine);
 			}
 			if (charWidth > 1) {
 				for (int c = 1; c < charWidth; c++) {
@@ -854,7 +853,7 @@ SelectionPosition EditView::SPositionFromLocation(Surface *surface, const EditMo
 		const int subLine = static_cast<int>(lineVisible - lineStartSet);
 		if (subLine < ll->lines) {
 			const Range rangeSubLine = ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly);
-			const XYPOSITION subLineStart = ll->positions[rangeSubLine.start];
+			const XYPOSITION subLineStart = ll->GetPosition(rangeSubLine.start);
 			if (subLine > 0)	// Wrapped
 				pt.x -= ll->wrapIndent;
 			Sci::Position positionInLine = 0;
@@ -876,11 +875,11 @@ SelectionPosition EditView::SPositionFromLocation(Surface *surface, const EditMo
 			if (virtualSpace) {
 				const XYPOSITION spaceWidth = vs.styles[ll->EndLineStyle()].spaceWidth;
 				const int spaceOffset = static_cast<int>(
-					(pt.x + subLineStart - ll->positions[rangeSubLine.end] + spaceWidth / 2) / spaceWidth);
+					(pt.x + subLineStart - ll->GetPosition(rangeSubLine.end) + (spaceWidth / 2)) / spaceWidth);
 				return SelectionPosition(rangeSubLine.end + posLineStart, spaceOffset);
 			}
 			if (canReturnInvalid) {
-				if (pt.x < (ll->positions[rangeSubLine.end] - subLineStart)) {
+				if (pt.x < (ll->GetPosition(rangeSubLine.end) - subLineStart)) {
 					return SelectionPosition(model.pdoc->MovePositionOutsideChar(rangeSubLine.end + posLineStart, 1));
 				}
 			} else {
@@ -904,14 +903,14 @@ SelectionPosition EditView::SPositionFromLineX(Surface *surface, const EditModel
 		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth, LayoutLineOption::AutoUpdate);
 		const Sci::Position posLineStart = model.pdoc->LineStart(lineDoc);
 		const Range rangeSubLine = ll->SubLineRange(0, LineLayout::Scope::visibleOnly);
-		const XYPOSITION subLineStart = ll->positions[rangeSubLine.start];
+		const XYPOSITION subLineStart = ll->GetPosition(rangeSubLine.start);
 		const Sci::Position positionInLine = ll->FindPositionFromX(x + subLineStart, rangeSubLine, false);
 		if (positionInLine < rangeSubLine.end) {
 			return SelectionPosition(model.pdoc->MovePositionOutsideChar(positionInLine + posLineStart, 1));
 		}
 		const XYPOSITION spaceWidth = vs.styles[ll->EndLineStyle()].spaceWidth;
 		const int spaceOffset = static_cast<int>(
-			(x + subLineStart - ll->positions[rangeSubLine.end] + spaceWidth / 2) / spaceWidth);
+			(x + subLineStart - ll->GetPosition(rangeSubLine.end) + (spaceWidth / 2)) / spaceWidth);
 		return SelectionPosition(rangeSubLine.end + posLineStart, spaceOffset);
 	}
 	return SelectionPosition(0);
@@ -1151,7 +1150,7 @@ void EditView::DrawEOL(Surface *surface, const EditModel &model, const ViewStyle
 	const Sci::Position virtualSpaces = lastSubLine ? model.VirtualSpaceForLine(line) : 0;
 	const XYPOSITION spaceWidth = lastSubLine ? vsDraw.styles[ll->EndLineStyle()].spaceWidth : 0;
 	const XYPOSITION virtualSpace = static_cast<XYPOSITION>(virtualSpaces) * spaceWidth;
-	const XYPOSITION xEol = ll->positions[lineEnd] - subLineStart;
+	const XYPOSITION xEol = ll->GetPosition(lineEnd) - subLineStart;
 
 	// Fill the virtual space and show selections within it
 	if (virtualSpace > 0.0f) {
@@ -1166,9 +1165,9 @@ void EditView::DrawEOL(Surface *surface, const EditModel &model, const ViewStyle
 			for (size_t r = 0; r < model.sel.Count(); r++) {
 				const SelectionSegment portion = model.sel.Range(r).Intersect(virtualSpaceRange);
 				if (!portion.Empty()) {
-					rcSegment.left = xStart + ll->positions[portion.start.Position() - posLineStart] -
+					rcSegment.left = xStart + ll->GetPosition(portion.start.Position() - posLineStart) -
 						subLineStart + portion.start.VirtualSpaceWidth(spaceWidth);
-					rcSegment.right = xStart + ll->positions[portion.end.Position() - posLineStart] -
+					rcSegment.right = xStart + ll->GetPosition(portion.end.Position() - posLineStart) -
 						subLineStart + portion.end.VirtualSpaceWidth(spaceWidth);
 					rcSegment.left = (rcSegment.left > rcLine.left) ? rcSegment.left : rcLine.left;
 					rcSegment.right = (rcSegment.right < rcLine.right) ? rcSegment.right : rcLine.right;
@@ -1340,7 +1339,7 @@ void EditView::DrawFoldDisplayText(Surface *surface, const EditModel &model, con
 
 	const XYPOSITION spaceWidth = vsDraw.styles[ll->EndLineStyle()].spaceWidth;
 	const XYPOSITION virtualSpace = static_cast<XYPOSITION>(model.VirtualSpaceForLine(line)) * spaceWidth;
-	rcSegment.left = xStart + ll->positions[ll->lastSegmentEnd] - subLineStart + virtualSpace + vsDraw.aveCharWidth;
+	rcSegment.left = xStart + ll->GetPosition(ll->lastSegmentEnd) - subLineStart + virtualSpace + vsDraw.aveCharWidth;
 	rcSegment.right = rcSegment.left + widthFoldDisplayText + margin*2;
 
 	const ColourOptional background = vsDraw.Background(model.GetMark(line), model.caret.active, ll->containsCaret);
@@ -1429,7 +1428,7 @@ void EditView::DrawEOLAnnotationText(Surface *surface, const EditModel &model, c
 	const XYPOSITION spaceWidth = vsDraw.styles[ll->EndLineStyle()].spaceWidth;
 	const XYPOSITION virtualSpace = static_cast<XYPOSITION>(model.VirtualSpaceForLine(line)) * spaceWidth;
 	rcSegment.left = xStart +
-		ll->positions[ll->numCharsInLine] - subLineStart
+		ll->GetPosition(ll->numCharsInLine) - subLineStart
 		+ virtualSpace + vsDraw.aveCharWidth;
 
 	const char *textFoldDisplay = model.GetFoldDisplayText(line, ll->PartialPosition());
@@ -1596,7 +1595,7 @@ void DrawBlockCaret(Surface *surface, const EditModel &model, const ViewStyle &v
 	Sci::Position offsetFirstChar = offset;
 	Sci::Position offsetLastChar = offset + (posAfter - posCaret);
 	while ((posBefore > 0) && ((offsetLastChar - numCharsToDraw) >= lineStart)) {
-		if ((ll->positions[offsetLastChar] - ll->positions[offsetLastChar - numCharsToDraw]) > 0) {
+		if (ll->GetWidth(offsetLastChar, offsetLastChar - numCharsToDraw) > 0) {
 			// The char does not share horizontal space
 			break;
 		}
@@ -1618,7 +1617,7 @@ void DrawBlockCaret(Surface *surface, const EditModel &model, const ViewStyle &v
 		posBefore = posAfter;
 		posAfter = model.pdoc->MovePositionOutsideChar(posAfter + 1, 1);
 		offsetLastChar = offset + (posAfter - posCaret);
-		if ((ll->positions[offsetLastChar] - ll->positions[offsetLastChar - (posAfter - posBefore)]) > 0) {
+		if (ll->GetWidth(offsetLastChar, offsetLastChar - (posAfter - posBefore)) > 0) {
 			// The char does not share horizontal space
 			break;
 		}
@@ -1627,8 +1626,8 @@ void DrawBlockCaret(Surface *surface, const EditModel &model, const ViewStyle &v
 	}
 
 	// We now know what to draw, update the caret drawing rectangle
-	rcCaret.left = ll->positions[offsetFirstChar] - ll->positions[lineStart] + xOrigin;
-	rcCaret.right = ll->positions[offsetFirstChar + numCharsToDraw] - ll->positions[lineStart] + xOrigin;
+	rcCaret.left = ll->GetWidth(offsetFirstChar, lineStart) + xOrigin;
+	rcCaret.right = ll->GetWidth(offsetFirstChar + numCharsToDraw, lineStart) + xOrigin;
 
 	// Adjust caret position to take into account any word wrapping symbols.
 	if ((ll->wrapIndent != 0) && (lineStart != 0)) {
@@ -1678,7 +1677,7 @@ void EditView::DrawCarets(Surface *surface, const EditModel &model, const ViewSt
 		const XYPOSITION virtualOffset = posCaret.VirtualSpaceWidth(spaceWidth);
 		if (ll->InLine(offset, subLine) && offset <= ll->numCharsBeforeEOL) {
 			const int lineStart = ll->LineStart(subLine);
-			XYPOSITION xposCaret = ll->positions[offset] + virtualOffset - ll->positions[lineStart];
+			XYPOSITION xposCaret = ll->GetWidth(offset, lineStart) + virtualOffset;
 			if (model.BidirectionalEnabled() && (posCaret.VirtualSpace() == 0)) {
 				// Get caret point
 				const ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right, tabWidthMinimumPixels);
@@ -1716,7 +1715,7 @@ void EditView::DrawCarets(Surface *surface, const EditModel &model, const ViewSt
 						bool invalidByte = false;
 						const int widthChar = model.pdoc->LenChar(posCaret.Position(), &invalidByte);
 						canDrawBlockCaret = !invalidByte;
-						widthOverstrikeCaret = ll->positions[offset + widthChar] - ll->positions[offset];
+						widthOverstrikeCaret = ll->GetWidth(offset + widthChar, offset);
 					}
 				}
 				// Make sure block caret visible
@@ -1814,12 +1813,12 @@ InSelection CharacterInCursesSelection(Sci::Position iDoc, const EditModel &mode
 }
 
 void DrawBackground(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
-	int xStart, PRectangle rcLine, int subLine, Range lineRange, Sci::Position posLineStart,
+	int xStart, PRectangle rcLine, int subLine, ForwardRange lineRange, Sci::Position posLineStart,
 	ColourOptional background) {
 
 	const bool selBackDrawn = vsDraw.SelectionBackgroundDrawn();
 	bool inIndentation = subLine == 0;	// Do not handle indentation except on first subline.
-	const XYPOSITION subLineStart = ll->positions[lineRange.start];
+	const XYPOSITION subLineStart = ll->GetPosition(lineRange.First());
 	const XYPOSITION horizontalOffset = xStart - subLineStart;
 	// Does not take margin into account but not significant
 	const XYPOSITION xStartVisible = -horizontalOffset;
@@ -1845,7 +1844,7 @@ void DrawBackground(Surface *surface, const EditModel &model, const ViewStyle &v
 			InSelection inSelection = vsDraw.selection.visible ? model.sel.CharacterInSelection(iDoc) : InSelection::inNone;
 			if (FlagSet(vsDraw.caret.style, CaretStyle::Curses) && (inSelection == InSelection::inMain))
 				inSelection = CharacterInCursesSelection(iDoc, model, vsDraw);
-			const bool inHotspot = model.hotspot.Valid() && model.hotspot.ContainsCharacter(iDoc);
+			const bool inHotspot = model.hotspot.ContainsCharacter(iDoc);
 			ColourRGBA textBack = TextBackground(model, vsDraw, ll, background, inSelection,
 				inHotspot, ll->styles[i], i);
 			if (ts.representation) {
@@ -1890,12 +1889,12 @@ void DrawBackground(Surface *surface, const EditModel &model, const ViewStyle &v
 }
 
 void DrawEdgeLine(Surface *surface, const ViewStyle &vsDraw, const LineLayout *ll,
-	int xStart, PRectangle rcLine, Range lineRange) {
+	int xStart, PRectangle rcLine, ForwardRange lineRange) {
 	if (vsDraw.edgeState == EdgeVisualStyle::Line) {
 		PRectangle rcSegment = rcLine;
 		const int edgeX = static_cast<int>(vsDraw.theEdge.column * vsDraw.aveCharWidth);
 		rcSegment.left = static_cast<XYPOSITION>(edgeX + xStart);
-		if ((ll->wrapIndent != 0) && (lineRange.start != 0))
+		if ((ll->wrapIndent != 0) && (lineRange.First() != 0))
 			rcSegment.left -= ll->wrapIndent;
 		rcSegment.right = rcSegment.left + 1;
 		surface->FillRectangleAligned(rcSegment, Fill(vsDraw.theEdge.colour));
@@ -1905,7 +1904,7 @@ void DrawEdgeLine(Surface *surface, const ViewStyle &vsDraw, const LineLayout *l
 				PRectangle rcSegment = rcLine;
 				const int edgeX = static_cast<int>(vsDraw.theMultiEdge[edge].column * vsDraw.aveCharWidth);
 				rcSegment.left = static_cast<XYPOSITION>(edgeX + xStart);
-				if ((ll->wrapIndent != 0) && (lineRange.start != 0))
+				if ((ll->wrapIndent != 0) && (lineRange.First() != 0))
 					rcSegment.left -= ll->wrapIndent;
 				rcSegment.right = rcSegment.left + 1;
 				surface->FillRectangleAligned(rcSegment, Fill(vsDraw.theMultiEdge[edge].colour));
@@ -1930,16 +1929,16 @@ void DrawMarkUnderline(Surface *surface, const EditModel &model, const ViewStyle
 }
 
 void DrawTranslucentSelection(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
-	Sci::Line line, int xStart, PRectangle rcLine, int subLine, Range lineRange, int tabWidthMinimumPixels, Layer layer) {
+	Sci::Line line, int xStart, PRectangle rcLine, int subLine, ForwardRange lineRange, int tabWidthMinimumPixels, Layer layer) {
 	if (vsDraw.selection.layer == layer) {
 		const Sci::Position posLineStart = model.pdoc->LineStart(line);
-		const XYPOSITION subLineStart = ll->positions[lineRange.start];
+		const XYPOSITION subLineStart = ll->GetPosition(lineRange.First());
 		const XYPOSITION horizontalOffset = xStart - subLineStart;
 		// For each selection draw
 		const Sci::Position virtualSpaces = (subLine == (ll->lines - 1)) ?
 			model.VirtualSpaceForLine(line) : 0;
-		const SelectionPosition posStart(posLineStart + lineRange.start);
-		const SelectionPosition posEnd(posLineStart + lineRange.end, virtualSpaces);
+		const SelectionPosition posStart(posLineStart + lineRange.First());
+		const SelectionPosition posEnd(posLineStart + lineRange.Last(), virtualSpaces);
 		const SelectionSegment virtualSpaceRange(posStart, posEnd);
 		for (size_t r = 0; r < model.sel.Count(); r++) {
 			const SelectionSegment portion = model.sel.Range(r).Intersect(virtualSpaceRange);
@@ -1951,7 +1950,7 @@ void DrawTranslucentSelection(Surface *surface, const EditModel &model, const Vi
 					portion.start.VirtualSpaceWidth(spaceWidth),
 					portion.end.VirtualSpaceWidth(spaceWidth) };
 				if (model.BidirectionalEnabled()) {
-					const SelectionSegment portionInSubLine = portionInLine.Subtract(lineRange.start);
+					const SelectionSegment portionInSubLine = portionInLine.Subtract(lineRange.First());
 
 					const ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right, tabWidthMinimumPixels);
 					const std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
@@ -1966,7 +1965,7 @@ void DrawTranslucentSelection(Surface *surface, const EditModel &model, const Vi
 					}
 
 					if (portion.end.VirtualSpace()) {
-						const XYPOSITION xStartVirtual = ll->positions[lineRange.end] + horizontalOffset;
+						const XYPOSITION xStartVirtual = ll->GetPosition(lineRange.Last()) + horizontalOffset;
 						const PRectangle rcSegment = rcLine.WithHorizontalBounds(intervalVirtual.Offset(xStartVirtual));
 						surface->FillRectangleAligned(rcSegment, selectionBack);
 					}
@@ -1977,8 +1976,8 @@ void DrawTranslucentSelection(Surface *surface, const EditModel &model, const Vi
 						.Offset(horizontalOffset);
 					intervalSegment.left += intervalVirtual.left;
 					intervalSegment.right += intervalVirtual.right;
-					if ((ll->wrapIndent != 0) && (lineRange.start != 0)) {
-						if ((portionInLine.start.Position() == lineRange.start) &&
+					if ((ll->wrapIndent != 0) && (lineRange.First() != 0)) {
+						if ((portionInLine.start.Position() == lineRange.First()) &&
 							model.sel.Range(r).ContainsCharacter(portion.start.Position() - 1)) {
 							// indentation added to xStart was truncated to int, so we do the same here
 							intervalSegment.left -= static_cast<int>(ll->wrapIndent);
@@ -2095,7 +2094,7 @@ void DrawIndicator(int indicNum, Sci::Position startPos, Sci::Position endPos, S
 	const LineLayout *ll, int xStart, PRectangle rcLine, Sci::Position secondCharacter, int subLine, Indicator::State state,
 	int value, bool bidiEnabled, int tabWidthMinimumPixels) {
 
-	const XYPOSITION subLineStart = ll->positions[ll->LineStart(subLine)];
+	const XYPOSITION subLineStart = ll->GetPosition(ll->LineStart(subLine));
 	const XYPOSITION horizontalOffset = xStart - subLineStart;
 	const XYPOSITION ybase = rcLine.top + vsDraw.maxAscent;
 
@@ -2108,11 +2107,11 @@ void DrawIndicator(int indicNum, Sci::Position startPos, Sci::Position endPos, S
 
 	if (bidiEnabled) {
 		ScreenLine screenLine(ll, subLine, vsDraw, rcLine.right - xStart, tabWidthMinimumPixels);
-		const Range lineRange = ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly);
+		const ForwardRange lineRange = ForwardRange(ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly));
 
 		const std::unique_ptr<IScreenLineLayout> slLayout = surface->Layout(&screenLine);
 		const std::vector<Interval> intervals = slLayout->FindRangeIntervals(
-			startPos - lineRange.start, endPos - lineRange.start);
+			startPos - lineRange.First(), endPos - lineRange.First());
 		for (const Interval &interval : intervals) {
 			PRectangle rcInterval = rcIndic;
 			rcInterval.left = interval.left + xStart;
@@ -2148,8 +2147,8 @@ void DrawIndicators(Surface *surface, const EditModel &model, const ViewStyle &v
 		if (under == vsDraw.indicators[deco->Indicator()].under) {
 			Sci::Position startPos = posLineStart + lineStart;
 			while (startPos < posLineEnd) {
-				const Range rangeRun(deco->StartRun(startPos), deco->EndRun(startPos));
-				const Sci::Position endPos = std::min(rangeRun.end, posLineEnd);
+				const ForwardRange rangeRun(deco->StartRun(startPos), deco->EndRun(startPos));
+				const Sci::Position endPos = std::min(rangeRun.Last(), posLineEnd);
 				const int value = deco->ValueAt(startPos);
 				if (value) {
 					const bool hover = vsDraw.indicators[deco->Indicator()].IsDynamic() &&
@@ -2190,8 +2189,8 @@ void DrawIndicators(Surface *surface, const EditModel &model, const ViewStyle &v
 			// Draw insertions
 			Sci::Position startPos = posLineStart + lineStart;
 			while (startPos < posLineEnd) {
-				const Range rangeRun(startPos, model.pdoc->EditionEndRun(startPos));
-				const Sci::Position endPos = std::min(rangeRun.end, posLineEnd);
+				const ForwardRange rangeRun(startPos, model.pdoc->EditionEndRun(startPos));
+				const Sci::Position endPos = std::min(rangeRun.Last(), posLineEnd);
 				const int edition = model.pdoc->EditionAt(startPos);
 				if (edition != 0) {
 					const int indicator = ((edition - 1) * 2) + indexHistory;
@@ -2281,14 +2280,14 @@ void EditView::DrawIndentGuide(Surface *surface, XYPOSITION start, PRectangle rc
 }
 
 void EditView::DrawForeground(Surface *surface, const EditModel &model, const ViewStyle &vsDraw, const LineLayout *ll,
-	int xStart, PRectangle rcLine, int subLine, Sci::Line lineVisible, Range lineRange, Sci::Position posLineStart,
+	int xStart, PRectangle rcLine, int subLine, Sci::Line lineVisible, ForwardRange lineRange, Sci::Position posLineStart,
 	ColourOptional background) const {
 
 	const bool selBackDrawn = vsDraw.SelectionBackgroundDrawn();
 	const bool drawWhitespaceBackground = vsDraw.WhitespaceBackgroundDrawn() && !background;
 	bool inIndentation = subLine == 0;	// Do not handle indentation except on first subline.
 
-	const XYPOSITION subLineStart = ll->positions[lineRange.start];
+	const XYPOSITION subLineStart = ll->GetPosition(lineRange.First());
 	const XYPOSITION horizontalOffset = xStart - subLineStart;
 	const XYPOSITION indentWidth = model.pdoc->IndentSize() * vsDraw.spaceWidth;
 
@@ -2322,7 +2321,7 @@ void EditView::DrawForeground(Surface *surface, const EditModel &model, const Vi
 			const Font *textFont = vsDraw.styles[styleMain].font.get();
 			bool hoverUnderline = vsDraw.styles[styleMain].underline;
 			// Hot-spot foreground
-			const bool inHotspot = model.hotspot.Valid() && model.hotspot.ContainsCharacter(iDoc);
+			const bool inHotspot = model.hotspot.ContainsCharacter(iDoc);
 			if (inHotspot) {
 				if (const ColourOptional colourHotSpot = vsDraw.ElementColour(Element::HotSpotActive)) {
 					textFore = *colourHotSpot;
@@ -2337,7 +2336,7 @@ void EditView::DrawForeground(Surface *surface, const EditModel &model, const Vi
 						bool hover = false;
 						if (indicator.IsDynamic()) {
 							const Sci::Position startPos = ts.start + posLineStart;
-							const Range rangeRun(deco->StartRun(startPos), deco->EndRun(startPos));
+							const ForwardRange rangeRun(deco->StartRun(startPos), deco->EndRun(startPos));
 							hover =	rangeRun.ContainsCharacter(model.hoverIndicatorPos);
 						}
 						if (hover) {
@@ -2513,7 +2512,7 @@ void EditView::DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &mode
 		&& (subLine == 0)) {
 		const Sci::Position posLineStart = model.pdoc->LineStart(line);
 		int indentSpace = model.pdoc->GetLineIndentation(line);
-		int xStartText = static_cast<int>(ll->positions[model.pdoc->GetLineIndentPosition(line) - posLineStart]);
+		int xStartText = static_cast<int>(ll->GetPosition(model.pdoc->GetLineIndentPosition(line) - posLineStart));
 
 		// Find the most recent line with some text
 		constexpr int largeIndent = 100000;
@@ -2581,9 +2580,9 @@ void EditView::DrawLine(Surface *surface, const EditModel &model, const ViewStyl
 
 	const Sci::Position posLineStart = model.pdoc->LineStart(line);
 
-	const Range lineRange = ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly);
-	const Range lineRangeIncludingEnd = ll->SubLineRange(subLine, LineLayout::Scope::includeEnd);
-	const XYPOSITION subLineStart = ll->positions[lineRange.start];
+	const ForwardRange lineRange = ForwardRange(ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly));
+	const ForwardRange lineRangeIncludingEnd = ForwardRange(ll->SubLineRange(subLine, LineLayout::Scope::includeEnd));
+	const XYPOSITION subLineStart = ll->GetPosition(lineRange.First());
 
 	if ((ll->wrapIndent != 0) && (subLine > 0)) {
 		if (FlagSet(phase, DrawPhase::back)) {
@@ -2601,7 +2600,7 @@ void EditView::DrawLine(Surface *surface, const EditModel &model, const ViewStyl
 			// Remove drawBack to not draw again in DrawFoldDisplayText
 			phase = static_cast<DrawPhase>(static_cast<int>(phase) & ~static_cast<int>(DrawPhase::back));
 			DrawEOL(surface, model, vsDraw, ll,
-				line, xStart, rcLine, subLine, lineRange.end, subLineStart, background);
+				line, xStart, rcLine, subLine, lineRange.Last(), subLineStart, background);
 			if (vsDraw.IsLineFrameOpaque(model.caret.active, ll->containsCaret)) {
 				DrawCaretLineFramed(surface, vsDraw, ll, rcLine, subLine);
 			}
@@ -2609,7 +2608,7 @@ void EditView::DrawLine(Surface *surface, const EditModel &model, const ViewStyl
 
 		if (FlagSet(phase, DrawPhase::indicatorsBack)) {
 			DrawIndicators(surface, model, vsDraw, ll, line, xStart, rcLine, subLine,
-				lineRangeIncludingEnd.end, true, tabWidthMinimumPixels);
+				lineRangeIncludingEnd.Last(), true, tabWidthMinimumPixels);
 			DrawEdgeLine(surface, vsDraw, ll, xStart, rcLine, lineRange);
 			DrawMarkUnderline(surface, model, vsDraw, line, rcLine);
 		}
@@ -2631,7 +2630,7 @@ void EditView::DrawLine(Surface *surface, const EditModel &model, const ViewStyl
 
 	if (FlagSet(phase, DrawPhase::indicatorsFore)) {
 		DrawIndicators(surface, model, vsDraw, ll, line, xStart, rcLine, subLine,
-			lineRangeIncludingEnd.end, false, tabWidthMinimumPixels);
+			lineRangeIncludingEnd.Last(), false, tabWidthMinimumPixels);
 	}
 
 	DrawFoldDisplayText(surface, model, vsDraw, ll, line, xStart, rcLine, subLine, subLineStart, phase);
@@ -2639,7 +2638,7 @@ void EditView::DrawLine(Surface *surface, const EditModel &model, const ViewStyl
 
 	if (phasesDraw == PhasesDraw::One) {
 		DrawEOL(surface, model, vsDraw, ll,
-			line, xStart, rcLine, subLine, lineRange.end, subLineStart, background);
+			line, xStart, rcLine, subLine, lineRange.Last(), subLineStart, background);
 		if (vsDraw.IsLineFrameOpaque(model.caret.active, ll->containsCaret)) {
 			DrawCaretLineFramed(surface, vsDraw, ll, rcLine, subLine);
 		}
@@ -2759,7 +2758,7 @@ void EditView::PaintText(Surface *surfaceWindow, const EditModel &model, const V
 					rcLine.top = static_cast<XYPOSITION>(ypos);
 					rcLine.bottom = static_cast<XYPOSITION>(ypos + vsDraw.lineHeight);
 
-					const Range rangeLine(model.pdoc->LineStart(lineDoc),
+					const ForwardRange rangeLine(model.pdoc->LineStart(lineDoc),
 						model.pdoc->LineStart(lineDoc + 1));
 
 					// Highlight the current braces if any
@@ -2798,7 +2797,7 @@ void EditView::PaintText(Surface *surfaceWindow, const EditModel &model, const V
 						surfaceWindow->Copy(rcCopyArea, from, *pixmapLine);
 					}
 
-					UpdateMaxWidth(ll->positions[ll->numCharsInLine]);
+					UpdateMaxWidth(ll->GetPosition(ll->numCharsInLine));
 #if defined(TIME_PAINTING)
 					durCopy += ep.Duration();
 #endif
