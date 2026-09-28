@@ -385,9 +385,9 @@ struct LayoutWorker {
 		XYPOSITION * const positions = ll->PositionsFor(ts.start + 1);
 		if (style.visible) {
 			if (ts.representation) {
+				// Tab is a special case of representation, taking a variable amount of space
+				// which will be filled in later.
 				if (ll->chars[ts.start] != '\t' || vstyle.tabDrawMode == TabDrawMode::ControlChar) {
-					// Tab is a special case of representation, taking a variable amount of space
-					// which will be filled in later.
 					XYPOSITION representationWidth = vstyle.controlCharWidth;
 					if (representationWidth <= 0.0) {
 						const Style &styleCtrl = vstyle.styles[StyleControlChar];
@@ -605,7 +605,8 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 			ll->wrapIndent = 0;
 			validity = LineLayout::ValidLevel::lines;
 		} else if (vstyle.edgeState == EdgeVisualStyle::Background) {
-			Sci::Position edgePosition = model.pdoc->FindColumn(line, vstyle.theEdge.column);
+			const Sci::Position endPos = posLineStart + ll->numCharsBeforeEOL;
+			Sci::Position edgePosition = model.pdoc->FindColumn(line, vstyle.theEdge.column, endPos);
 			edgePosition -= posLineStart;
 			ll->edgeColumn = static_cast<int>(edgePosition);
 		}
@@ -682,21 +683,18 @@ uint32_t EditView::LayoutLine(const EditModel &model, Surface *surface, const Vi
 				width -= static_cast<int>(aveCharWidth); // take into account the space for end wrap mark
 			}
 			XYPOSITION wrapAddIndent = 0; // This will be added to initial indent of line
-			switch (vstyle.wrap.indentMode) {
-			case WrapIndentMode::Fixed:
+			const WrapIndentMode indentMode = vstyle.wrap.indentMode;
+			if (indentMode == WrapIndentMode::Fixed) {
 				wrapAddIndent = vstyle.wrap.visualStartIndent * aveCharWidth;
-				break;
-			case WrapIndentMode::Indent:
-				wrapAddIndent = model.pdoc->IndentSize() * aveCharWidth;
-				break;
-			case WrapIndentMode::DeepIndent:
-				wrapAddIndent = model.pdoc->IndentSize() * 2 * aveCharWidth;
-				break;
-			default:	// No additional indent for WrapIndentMode::Fixed
-				break;
+			} else if (indentMode >= WrapIndentMode::Indent) {
+				int indentWidth = model.pdoc->IndentSize();
+				if (indentMode != WrapIndentMode::Indent) {
+					indentWidth += indentWidth;
+				}
+				wrapAddIndent = indentWidth * aveCharWidth;
 			}
 			XYPOSITION wrapIndent = wrapAddIndent;
-			if (vstyle.wrap.indentMode != WrapIndentMode::Fixed) {
+			if (indentMode != WrapIndentMode::Fixed) {
 				for (int i = 0; i < ll->lastSegmentEnd; i++) {
 					if (!IsSpaceOrTab(ll->chars[i])) {
 						wrapIndent += ll->GetPosition(i); // Add line indent
@@ -744,7 +742,7 @@ void EditView::UpdateBidiData(const EditModel &model, const ViewStyle &vstyle, L
 			const Representation *repr = model.reprs->RepresentationFromCharacter(std::string_view(&ll->chars[charsInLine], charWidth));
 
 			ll->bidiData->widthReprs[charsInLine] = 0.0f;
-			if (repr && ll->chars[charsInLine] != '\t' && vstyle.tabDrawMode != TabDrawMode::ControlChar) {
+			if (repr && (ll->chars[charsInLine] != '\t' || vstyle.tabDrawMode == TabDrawMode::ControlChar)) {
 				ll->bidiData->widthReprs[charsInLine] = ll->GetWidth(charsInLine + charWidth, charsInLine);
 			}
 			if (charWidth > 1) {
@@ -836,10 +834,10 @@ Range EditView::RangeDisplayLine(Surface *surface, const EditModel &model, Sci::
 SelectionPosition EditView::SPositionFromLocation(Surface *surface, const EditModel &model, PointDocument pt, bool canReturnInvalid,
 	bool charPosition, bool virtualSpace, const ViewStyle &vs, PRectangle rcClient) {
 	pt.x = pt.x - vs.textStart;
-	Sci::Line lineVisible = static_cast<int>(std::floor(pt.y / vs.lineHeight));
-	if (!canReturnInvalid && (lineVisible < 0))
-		lineVisible = 0;
-	const Sci::Line lineDoc = model.pcs->DocFromDisplay(lineVisible);
+	Sci::Line visibleLine = static_cast<int>(std::floor(pt.y / vs.lineHeight));
+	if (!canReturnInvalid && (visibleLine < 0))
+		visibleLine = 0;
+	const Sci::Line lineDoc = model.pcs->DocFromDisplay(visibleLine);
 	if (canReturnInvalid && (lineDoc < 0))
 		return SelectionPosition(Sci::invalidPosition);
 	if (lineDoc >= model.pdoc->LinesTotal())
@@ -850,7 +848,7 @@ SelectionPosition EditView::SPositionFromLocation(Surface *surface, const EditMo
 		auto const ll = RetrieveLineLayout(lineDoc, model);
 		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth, LayoutLineOption::AutoUpdate);
 		const Sci::Line lineStartSet = model.pcs->DisplayFromDoc(lineDoc);
-		const int subLine = static_cast<int>(lineVisible - lineStartSet);
+		const int subLine = static_cast<int>(visibleLine - lineStartSet);
 		if (subLine < ll->lines) {
 			const Range rangeSubLine = ll->SubLineRange(subLine, LineLayout::Scope::visibleOnly);
 			const XYPOSITION subLineStart = ll->GetPosition(rangeSubLine.start);
@@ -1154,14 +1152,14 @@ void EditView::DrawEOL(Surface *surface, const EditModel &model, const ViewStyle
 
 	// Fill the virtual space and show selections within it
 	if (virtualSpace > 0.0f) {
-		PRectangle rcSegment = rcLine;
-		rcSegment.left = xEol + xStart;
-		rcSegment.right = xEol + xStart + virtualSpace;
+		const Interval intervalVirtual = Interval::FromLeftAndWidth(xEol + xStart, virtualSpace);
+		PRectangle rcSegment = rcLine.WithHorizontalBounds(intervalVirtual);
 		const ColourRGBA backgroundFill = background.value_or(vsDraw.styles[ll->LastStyle()].back);
 		surface->FillRectangleAligned(rcSegment, backgroundFill);
 		if (vsDraw.selection.visible && (vsDraw.selection.layer == Layer::Base)) {
-			const SelectionSegment virtualSpaceRange(SelectionPosition(model.pdoc->LineEnd(line)),
-				SelectionPosition(model.pdoc->LineEnd(line), virtualSpaces));
+			const Sci::Position posLineEnd = posLineStart + ll->numCharsBeforeEOL;
+			const SelectionSegment virtualSpaceRange(SelectionPosition(posLineEnd),
+				SelectionPosition(posLineEnd, virtualSpaces));
 			for (size_t r = 0; r < model.sel.Count(); r++) {
 				const SelectionSegment portion = model.sel.Range(r).Intersect(virtualSpaceRange);
 				if (!portion.Empty()) {
@@ -1169,8 +1167,8 @@ void EditView::DrawEOL(Surface *surface, const EditModel &model, const ViewStyle
 						subLineStart + portion.start.VirtualSpaceWidth(spaceWidth);
 					rcSegment.right = xStart + ll->GetPosition(portion.end.Position() - posLineStart) -
 						subLineStart + portion.end.VirtualSpaceWidth(spaceWidth);
-					rcSegment.left = (rcSegment.left > rcLine.left) ? rcSegment.left : rcLine.left;
-					rcSegment.right = (rcSegment.right < rcLine.right) ? rcSegment.right : rcLine.right;
+					rcSegment.left = std::max(rcSegment.left, rcLine.left);
+					rcSegment.right = std::min(rcSegment.right, rcLine.right);
 					surface->FillRectangleAligned(rcSegment, Fill(
 						SelectionBackground(model, vsDraw, model.sel.RangeType(r)).Opaque()));
 				}
@@ -1269,7 +1267,6 @@ void EditView::DrawEOL(Surface *surface, const EditModel &model, const ViewStyle
 	} else if (const Style &styleLast = vsDraw.styles[ll->LastStyle()]; styleLast.eolFilled) {
 		base = styleLast.back;
 	}
-
 	surface->FillRectangleAligned(rcEOLIsSelected, Fill(base.Opaque()));
 	if (drawEOLSelection && (vsDraw.selection.layer != Layer::Base)) {
 		surface->FillRectangleAligned(rcEOLIsSelected, selectionBack);
@@ -2173,9 +2170,10 @@ void DrawIndicators(Surface *surface, const EditModel &model, const ViewStyle &v
 				const Sci::Position braceOffset = model.braces[brace] - posLineStart;
 				if (braceOffset >= lineStart && braceOffset < lineEnd) {
 					if (InLineRange(braceOffset, ll->numCharsInLine)) {
-						const Sci::Position secondOffset = model.pdoc->MovePositionOutsideChar(model.braces[brace] + 1, 1) - posLineStart;
-						DrawIndicator(braceIndicator, braceOffset, braceOffset + 1, surface, vsDraw, ll, xStart, rcLine, secondOffset,
-							subLine, Indicator::State::normal, 1, model.BidirectionalEnabled(), tabWidthMinimumPixels);
+						const Sci::Position braceEnd = model.pdoc->MovePositionOutsideChar(model.braces[brace] + 1, 1) - posLineStart;
+						DrawIndicator(braceIndicator, braceOffset, braceEnd,
+							surface, vsDraw, ll, xStart, rcLine, braceEnd, subLine, Indicator::State::normal,
+							1, model.BidirectionalEnabled(), tabWidthMinimumPixels);
 					}
 				}
 			}
@@ -2295,7 +2293,7 @@ void EditView::DrawForeground(Surface *surface, const EditModel &model, const Vi
 	const XYPOSITION xStartVisible = -horizontalOffset;
 
 	// When lineHeight is odd, dotted indent guides are drawn offset by 1 on odd lines to join together.
-	const bool offsetGuide = (lineVisible & 1) && (vsDraw.lineHeight & 1);
+	const bool offsetGuide = (lineVisible & 1) & (vsDraw.lineHeight & 1);
 
 	// Same baseline used for all text
 	const XYPOSITION ybase = rcLine.top + vsDraw.maxAscent;
@@ -2519,7 +2517,8 @@ void EditView::DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &mode
 		constexpr Sci::Line maxCheck = 20;
 
 		Sci::Line lineLastWithText = line;
-		while (lineLastWithText > std::max(line - maxCheck, static_cast<Sci::Line>(0)) && model.pdoc->IsWhiteLine(lineLastWithText)) {
+		const Sci::Line before = std::max(line - maxCheck, static_cast<Sci::Line>(0));
+		while (lineLastWithText > before && model.pdoc->IsWhiteLine(lineLastWithText)) {
 			lineLastWithText--;
 		}
 		if (lineLastWithText < line) {
@@ -2542,7 +2541,8 @@ void EditView::DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &mode
 		}
 
 		Sci::Line lineNextWithText = line;
-		while (lineNextWithText < std::min(line + maxCheck, model.pdoc->LinesTotal()) && model.pdoc->IsWhiteLine(lineNextWithText)) {
+		const Sci::Line after = std::min(line + maxCheck, model.pdoc->LinesTotal());
+		while (lineNextWithText < after && model.pdoc->IsWhiteLine(lineNextWithText)) {
 			lineNextWithText++;
 		}
 		if (lineNextWithText > line) {
@@ -2552,8 +2552,9 @@ void EditView::DrawIndentGuidesOverEmpty(Surface *surface, const EditModel &mode
 				model.pdoc->GetLineIndentation(lineNextWithText));
 		}
 
-		const bool offsetGuide = (lineVisible & 1) && (vsDraw.lineHeight & 1);
-		for (int indentPos = model.pdoc->IndentSize(); indentPos < indentSpace; indentPos += model.pdoc->IndentSize()) {
+		const bool offsetGuide = (lineVisible & 1) & (vsDraw.lineHeight & 1);
+		const int indentationStep = model.pdoc->IndentSize();
+		for (int indentPos = indentationStep; indentPos < indentSpace; indentPos += indentationStep) {
 			const XYPOSITION xIndent = std::floor(indentPos * vsDraw.aveCharWidth);
 			if (xIndent < xStartText) {
 				DrawIndentGuide(surface, xIndent + xStart, rcLine,	ll->xHighlightGuide == xIndent, offsetGuide);
@@ -2758,8 +2759,8 @@ void EditView::PaintText(Surface *surfaceWindow, const EditModel &model, const V
 					rcLine.top = static_cast<XYPOSITION>(ypos);
 					rcLine.bottom = static_cast<XYPOSITION>(ypos + vsDraw.lineHeight);
 
-					const ForwardRange rangeLine(model.pdoc->LineStart(lineDoc),
-						model.pdoc->LineStart(lineDoc + 1));
+					const Sci::Position lineStart = model.pdoc->LineStart(lineDoc);
+					const ForwardRange rangeLine(lineStart, lineStart + ll->numCharsInLine);
 
 					// Highlight the current braces if any
 					ll->SetBracesHighlight(rangeLine, model.braces, static_cast<unsigned char>(model.bracesMatchStyle),

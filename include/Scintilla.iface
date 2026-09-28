@@ -1251,7 +1251,7 @@ get int GetLineIndentation=2127(line line,)
 get position GetLineIndentPosition=2128(line line,)
 
 # Retrieve the column number of a position, taking tab width into account.
-get position GetColumn=2129(position pos,)
+get position GetColumn=2129(position pos, line line)
 
 # Count characters between two positions.
 fun position CountCharacters=2633(position start, position end)
@@ -2262,7 +2262,7 @@ fun void BraceBadLightIndicator=2499(bool useSetting, int indicator)
 fun position BraceMatch=2353(position pos, int maxReStyle)
 
 # Similar to BraceMatch, but matching starts at the explicit start position.
-fun position BraceMatchNext=2369(position pos, position startPos)
+#fun position BraceMatchNext=2369(position pos, position startPos)
 
 # Are the end of line characters visible?
 get bool GetViewEOL=2355(,)
@@ -2735,6 +2735,13 @@ fun position EncodedFromUTF8=2449(string utf8, stringresult encoded)
 # Find the position of a column on a line taking into account tabs and
 # multi-byte characters. If beyond end of line, return line end position.
 fun position FindColumn=2456(line line, position column)
+
+enu ColumnType=SC_COLUMN_
+val SC_COLUMN_DEFAULT=0
+val SC_COLUMN_CHARACTER=1
+val SC_COLUMN_BYTE=2
+
+fun position FindColumnEx=2759(ColumnType type, charrange chrg)
 
 enu CaretSticky=SC_CARETSTICKY_
 val SC_CARETSTICKY_OFF=0

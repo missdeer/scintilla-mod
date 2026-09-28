@@ -1044,9 +1044,9 @@ void Editor::VerticalCentreCaret() {
 	const Sci::Line lineDoc =
 		pdoc->SciLineFromPosition(sel.IsRectangular() ? sel.Rectangular().caret.Position() : sel.MainCaret());
 	const Sci::Line lineDisplay = pcs->DisplayFromDoc(lineDoc);
-	const Sci::Line newTop = lineDisplay - (LinesOnScreen() / 2);
+	const Sci::Line newTop = std::clamp<Sci::Line>(lineDisplay - (LinesOnScreen() / 2), 0, MaxScrollPos());
 	if (topLine != newTop) {
-		SetTopLine(newTop > 0 ? newTop : 0);
+		SetTopLine(newTop);
 		SetVerticalScrollPos();
 		RedrawRect(GetClientRectangle());
 	}
@@ -1389,7 +1389,7 @@ Editor::XYScrollPosition Editor::XYScrollToMakeVisible(SelectionRange range, con
 				(bJump && (pt.x < rcClient.left || pt.x >= rcClient.right))) {
 				// Strict or going out of display
 				if (bEven) {
-					// centre caret
+					// Centre caret
 					newXY.xOffset += static_cast<int>(pt.x - rcClient.left - halfScreen);
 				} else {
 					// Put caret on right
@@ -2550,13 +2550,12 @@ void Editor::Clear() {
 		}
 		const UndoGroup ug(pdoc, (sel.Count() > 1) || singleVirtual);
 		for (size_t r = 0; r < sel.Count(); r++) {
-			const Sci::Position caretPosition = sel.Range(r).caret.Position();
+			Sci::Position caretPosition = sel.Range(r).caret.Position();
 			if (!RangeContainsProtected(caretPosition, caretPosition + 1)) {
-				if (sel.Range(r).Start().VirtualSpace()) {
-					if (sel.Range(r).anchor < sel.Range(r).caret)
-						sel.Range(r) = SelectionRange(RealizeVirtualSpace(caretPosition, sel.Range(r).anchor.VirtualSpace()));
-					else
-						sel.Range(r) = SelectionRange(RealizeVirtualSpace(caretPosition, sel.Range(r).caret.VirtualSpace()));
+				const SelectionPosition start = sel.Range(r).Start();
+				if (start.VirtualSpace()) {
+					sel.Range(r) = SelectionRange(RealizeVirtualSpace(start));
+					caretPosition = sel.Range(r).caret.Position();
 				}
 				if ((sel.Count() == 1) || !pdoc->IsPositionInLineEnd(caretPosition)) {
 					pdoc->DelChar(caretPosition);
@@ -2628,7 +2627,7 @@ bool Editor::BackspaceUnindent(Sci::Position lineCurrentPos, Sci::Position caret
 		return false;
 	}
 
-	const Sci::Position column = pdoc->GetColumn(caretPosition);
+	const Sci::Position column = pdoc->GetColumn(caretPosition, lineCurrentPos);
 	const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
 	if (column > 0 && (column <= indentation || chPrev == ' ')) {
 		const int indentationStep = pdoc->IndentSize();
@@ -3383,7 +3382,7 @@ void Editor::ChangeCaseOfSelection(CaseMapping caseMapping) {
 			std::string_view mapped = sMapped;
 			if (mapped != text) {
 				size_t firstDifference = 0;
-				// similar to Document::TrimReplacement()
+				// Similar to Document::TrimReplacement()
 				while (!mapped.empty() && !text.empty() && mapped.front() == text.front()) {
 					firstDifference++;
 					text.remove_prefix(1);
@@ -4376,7 +4375,7 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 				pdoc->DeleteChars(sel.Range(r).Start().Position(), sel.Range(r).Length());
 				caretPosition = sel.Range(r).caret.Position();
 				const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
-				const Sci::Position column = pdoc->GetColumn(caretPosition);
+				const Sci::Position column = pdoc->GetColumn(caretPosition, lineCurrentPos);
 				if (column <= indentation && pdoc->tabIndents) {
 					// Inside initial whitespace
 					const Sci::Position posSelect = pdoc->SetLineIndentation(
@@ -4395,7 +4394,7 @@ void Editor::Indent(bool forwards, bool lineIndent) {
 				}
 			} else {
 				const int indentation = pdoc->GetLineIndentation(lineCurrentPos);
-				const Sci::Position column = pdoc->GetColumn(caretPosition);
+				const Sci::Position column = pdoc->GetColumn(caretPosition, lineCurrentPos);
 				if (column <= indentation && pdoc->tabIndents) {
 					const Sci::Position posSelect = pdoc->SetLineIndentation(lineCurrentPos, indentation - indentationStep);
 					sel.Range(r) = SelectionRange(posSelect);
@@ -6547,8 +6546,8 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 			const Sci::Position lineStart =
 				pdoc->LineStart(LineFromUPtr(wParam));
 			const Sci::Position lineEnd =
-				pdoc->LineStart(LineFromUPtr(wParam) + 1);
-			// not NULL terminated
+				pdoc->LineStart(LineFromUPtr(wParam + 1));
+			// not NUL terminated
 			const Sci::Position len = lineEnd - lineStart;
 			if (lParam == 0) {
 				return len;
@@ -7475,10 +7474,15 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		break;
 
 	case Message::GetColumn:
-		return pdoc->GetColumn(PositionFromUPtr(wParam));
+		return pdoc->GetColumn(PositionFromUPtr(wParam), lParam);
 
 	case Message::FindColumn:
 		return pdoc->FindColumn(LineFromUPtr(wParam), lParam);
+
+	case Message::FindColumnEx: {
+		const auto *chrg = AsPointer<const CharacterRangeFull *>(lParam);
+		return pdoc->FindColumn(chrg->cpMin, chrg->cpMax, -1, static_cast<ColumnType>(wParam));
+	}
 
 	case Message::SetHScrollBar:
 		if (horizontalScrollBarVisible != (wParam != 0)) {
@@ -8376,14 +8380,11 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		// wParam is position of char to find brace for,
 		// lParam is maximum amount of text to restyle to find it
 		// const ElapsedPeriod period;
-		const Sci::Position position = pdoc->BraceMatch(PositionFromUPtr(wParam), lParam, 0, false);
+		const Sci::Position position = pdoc->BraceMatch(PositionFromUPtr(wParam), lParam);
 		// const double duration = period.Duration()*1e3;
 		// printf("BraceMatch %zu / %zd, %zd / %zd, %f\n", wParam, position, pdoc->GetEndStyled(), pdoc->LengthNoExcept(), duration);
 		return position;
 	}
-
-	case Message::BraceMatchNext:
-		return pdoc->BraceMatch(PositionFromUPtr(wParam), 0, lParam, true);
 
 	case Message::GetViewEOL:
 		return vs.viewEOL;

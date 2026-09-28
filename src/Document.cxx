@@ -101,15 +101,15 @@ void LexInterface::Colourise(Sci::Position start, Sci::Position end) {
 	}
 }
 
-bool LexInterface::UseContainerLexing() const noexcept {
-	return !instance;
-}
-
 LineEndType LexInterface::LineEndTypesSupported() const noexcept {
 	if (instance) {
 		return static_cast<LineEndType>(instance->LineEndTypesSupported());
 	}
 	return LineEndType::Default;
+}
+
+bool LexInterface::UseContainerLexing() const noexcept {
+	return !instance;
 }
 
 void ActionDuration::AddSample(Sci::Position numberActions, double durationOfActions) noexcept {
@@ -654,6 +654,7 @@ Sci::Line Document::GetLastChild(Sci::Line lineParent, FoldLevel level, Sci::Lin
 	if (lastLine < 0 || lastLine > maxLine) {
 		lastLine = maxLine;
 	}
+	const Sci::Line lookLastLine = lastLine;
 	Sci::Line lineMaxSubord = lineParent;
 
 	// A fold start is commonly closely followed by its last child, but it could be a long distance,
@@ -672,7 +673,7 @@ Sci::Line Document::GetLastChild(Sci::Line lineParent, FoldLevel level, Sci::Lin
 		}
 		if (!IsSubordinate(levelStart, GetFoldLevel(lineMaxSubord + 1)))
 			break;
-		if ((lineMaxSubord >= lastLine) && !LevelIsWhitespace(GetFoldLevel(lineMaxSubord)))
+		if ((lineMaxSubord >= lookLastLine) && !LevelIsWhitespace(GetFoldLevel(lineMaxSubord)))
 			break;
 		lineMaxSubord++;
 	}
@@ -812,7 +813,7 @@ int Document::LenChar(Sci::Position pos, bool *invalid) const noexcept {
 
 bool Document::InGoodUTF8(Sci::Position pos, Sci::Position &start, Sci::Position &end) const noexcept {
 	Sci::Position trail = pos;
-	while ((trail > 0) && (pos - trail < UTF8MaxBytes) && UTF8IsTrailByte(cb.CharAt(trail - 1))) {
+	while ((trail > 0) && (pos - trail < UTF8MaxBytes) && UTF8IsTrailByte(cb.UCharAt(trail - 1))) {
 		trail--;
 	}
 	start = (trail > 0) ? trail - 1 : trail;
@@ -1158,7 +1159,8 @@ bool Document::IsDBCSDualByteAt(Sci::Position pos) const noexcept {
 
 namespace {
 
-constexpr Sci::Position NextTab(Sci::Position pos, Sci::Position tabSize) noexcept {
+template <typename T>
+constexpr T NextTab(T pos, unsigned tabSize) noexcept {
 	return ((pos / tabSize) + 1) * tabSize;
 }
 
@@ -1636,7 +1638,7 @@ void Document::DelCharBack(Sci::Position pos) {
 }
 
 int SCI_METHOD Document::GetLineIndentation(Sci_Line line) const noexcept {
-	int indent = 0;
+	unsigned indent = 0;
 	if (IsValidIndex(line, LinesTotal())) {
 		const Sci::Position lineStart = LineStart(line);
 		const Sci::Position length = LengthNoExcept();
@@ -1645,7 +1647,7 @@ int SCI_METHOD Document::GetLineIndentation(Sci_Line line) const noexcept {
 			if (ch == ' ')
 				indent++;
 			else if (ch == '\t')
-				indent = static_cast<int>(NextTab(indent, tabInChars));
+				indent = NextTab(indent, tabInChars);
 			else
 				return indent;
 		}
@@ -1688,26 +1690,30 @@ Sci::Position Document::GetLineIndentPosition(Sci::Line line) const noexcept {
 	return pos;
 }
 
-Sci::Position Document::GetColumn(Sci::Position pos) const noexcept {
+Sci::Position Document::GetColumn(Sci::Position pos, Sci::Line line) const noexcept {
 	Sci::Position column = 0;
-	const Sci::Line line = SciLineFromPosition(pos);
-	if (IsValidIndex(line, LinesTotal())) {
-		const Sci::Position length = LengthNoExcept();
-		pos = std::min(pos, length);
-		for (Sci::Position i = cb.LineStart(line); i < pos;) {
-			const char ch = cb.CharAt(i);
-			if (ch == '\t') {
-				column = NextTab(column, tabInChars);
-				i++;
-			} else if (ch == '\n' || ch == '\r') {
+	if (line < 0) {
+		line = SciLineFromPosition(pos);
+	}
+	const Sci::Position length = LengthNoExcept();
+	pos = std::min(pos, length);
+	for (Sci::Position i = cb.LineStart(line); i < pos;) {
+		const char ch = cb.CharAt(i);
+		if (ch == '\t') {
+			column = NextTab(column, tabInChars);
+			i++;
+		} else if (ch == '\n' || ch == '\r') {
+			return column;
+		} else if (UTF8IsAscii(ch)) {
+			column++;
+			i++;
+		} else {
+			i = NextPosition(i, 1);
+			if (i > pos) {
+				// For pos inside multibyte character report column before
 				return column;
-			} else if (UTF8IsAscii(ch)) {
-				column++;
-				i++;
-			} else {
-				column++;
-				i = NextPosition(i, 1);
 			}
+			column++;
 		}
 	}
 	return column;
@@ -1767,27 +1773,38 @@ Sci::Position Document::CountUTF16(Sci::Position startPos, Sci::Position endPos)
 	return count;
 }
 
-Sci::Position Document::FindColumn(Sci::Line line, Sci::Position column) const noexcept {
-	Sci::Position position = LineStart(line);
-	if (IsValidIndex(line, LinesTotal())) {
-		const Sci::Position length = LengthNoExcept();
-		Sci::Position columnCurrent = 0;
-		while ((columnCurrent < column) && (position < length)) {
-			const char ch = cb.CharAt(position);
-			if (ch == '\t') {
-				columnCurrent = NextTab(columnCurrent, tabInChars);
-				if (columnCurrent > column)
-					return position;
-				position++;
-			} else if (ch == '\n' || ch == '\r') {
+Sci::Position Document::FindColumn(Sci::Line line, Sci::Position column, Sci::Position endPos, ColumnType type) const noexcept {
+	Sci::Position position = cb.LineStart(line);
+	if (endPos < 0) {
+		endPos = cb.LineEnd(line);
+	}
+	unsigned tabSize = 0;
+	if (column > 0 && (type == ColumnType::Character || type == ColumnType::Byte)) {
+		if (position + column >= endPos) {
+			position = endPos;
+		} else if (type == ColumnType::Byte || dbcsCodePage == 0) {
+			position = MovePositionOutsideChar(position + column, -1, false);
+			column = 0;
+		}
+	} else {
+		tabSize = static_cast<unsigned>(type);
+		tabSize = (tabSize > 15)? (tabSize >> 4) : tabInChars;
+	}
+
+	Sci::Position columnCurrent = 0;
+	while ((columnCurrent < column) && (position < endPos)) {
+		const char ch = cb.CharAt(position);
+		if (ch == '\t' && tabSize != 0) {
+			columnCurrent = NextTab(columnCurrent, tabSize);
+			if (columnCurrent > column)
 				return position;
-			} else if (UTF8IsAscii(ch)) {
-				columnCurrent++;
-				position++;
-			} else {
-				columnCurrent++;
-				position = NextPosition(position, 1);
-			}
+			position++;
+		} else if (UTF8IsAscii(ch)) {
+			columnCurrent++;
+			position++;
+		} else {
+			columnCurrent++;
+			position = NextPosition(position, 1);
 		}
 	}
 	return position;
@@ -1798,7 +1815,7 @@ void Document::Indent(bool forwards, Sci::Line lineBottom, Sci::Line lineTop) {
 	for (Sci::Line line = lineBottom; line >= lineTop; line--) {
 		const Sci::Position indentOfLine = GetLineIndentation(line);
 		if (forwards) {
-			if (LineStart(line) < LineEnd(line)) {
+			if (indentOfLine != 0 || LineStart(line) < LineEnd(line)) {
 				SetLineIndentation(line, indentOfLine + IndentSize());
 			}
 		} else {
@@ -3029,7 +3046,7 @@ constexpr char BraceOpposite(char ch) noexcept {
 }
 
 // TODO: should be able to extend styled region to find matching brace
-Sci::Position Document::BraceMatch(Sci::Position position, Sci::Position /*maxReStyle*/, Sci::Position startPos, bool useStartPos) const noexcept {
+Sci::Position Document::BraceMatch(Sci::Position position, Sci::Position startPos) const noexcept {
 	const unsigned char chBrace = CharAt(position);
 	const unsigned char chSeek = BraceOpposite(chBrace);
 	if (chSeek == '\0') {
@@ -3038,7 +3055,7 @@ Sci::Position Document::BraceMatch(Sci::Position position, Sci::Position /*maxRe
 	const int styBrace = StyleIndexAt(position);
 	const int direction = (chBrace < chSeek) ? 1 : -1;
 	const unsigned char safeChar = asciiBackwardSafeChar;
-	position = useStartPos ? startPos : position + direction;
+	position = (startPos >= 0) ? startPos : position + direction;
 	const Sci::Position endStylePos = GetEndStyled();
 	const Sci::Position length = LengthNoExcept();
 	const SplitView cbView = cb.AllView();

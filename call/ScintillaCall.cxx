@@ -1094,8 +1094,8 @@ Position ScintillaCall::LineIndentPosition(Line line) {
 	return Call(Message::GetLineIndentPosition, line);
 }
 
-Position ScintillaCall::Column(Position pos) {
-	return Call(Message::GetColumn, pos);
+Position ScintillaCall::Column(Position pos, Line line) {
+	return Call(Message::GetColumn, pos, line);
 }
 
 Position ScintillaCall::CountCharacters(Position start, Position end) {
@@ -2106,10 +2106,6 @@ Position ScintillaCall::BraceMatch(Position pos, int maxReStyle) {
 	return Call(Message::BraceMatch, pos, maxReStyle);
 }
 
-Position ScintillaCall::BraceMatchNext(Position pos, Position startPos) {
-	return Call(Message::BraceMatchNext, pos, startPos);
-}
-
 bool ScintillaCall::ViewEOL() {
 	return Call(Message::GetViewEOL);
 }
@@ -2576,6 +2572,10 @@ std::string ScintillaCall::EncodedFromUTF8(const char *utf8) {
 
 Position ScintillaCall::FindColumn(Line line, Position column) {
 	return Call(Message::FindColumn, line, column);
+}
+
+Position ScintillaCall::FindColumnEx(Scintilla::ColumnType type, const CharacterRangeFull *chrg) {
+	return CallConstPointer(Message::FindColumnEx, static_cast<uintptr_t>(type), chrg);
 }
 
 CaretSticky ScintillaCall::CaretSticky() {
