@@ -252,6 +252,7 @@ void PHPLexer::ClassifyHtmlTag(LexerWordList keywordLists) {
 	sc.SetState(state);
 }
 
+SCI_noinline
 bool PHPLexer::HandleBlockEnd(HtmlTextBlock block) {
 	if (block == HtmlTextBlock::PHP) {
 		kwType = KeywordType::None;
@@ -278,14 +279,17 @@ bool PHPLexer::HandleBlockEnd(HtmlTextBlock block) {
 	if (match) {
 		kwType = KeywordType::None;
 		tagType = HtmlTagType::None;
-		lineStateAttribute = 0;
-		propertyValue = 0;
-		parenCount = 0;
-		selectorLevel = 0;
 		lineStateLineType &= LineStateNestedStateLine;
 		if (!nestedState.empty()) {
 			lineStateLineType = LineStateNestedStateLine;
 			nestedState.clear();
+		}
+		if (lineStateAttribute != 0 || propertyValue != 0 || parenCount != 0 || selectorLevel != 0) {
+			lineStateLineType = LineStateNestedStateLine;
+			lineStateAttribute = 0;
+			propertyValue = 0;
+			parenCount = 0;
+			selectorLevel = 0;
 		}
 		sc.SetState(SCE_H_TAG);
 		sc.Forward();
@@ -1356,7 +1360,7 @@ void ColourisePHPDoc(Sci_PositionU startPos, Sci_Position lengthDoc, int initSty
 					sc.ChangeState(js_style(SCE_JS_OPERATOR_PF));
 					sc.Forward();
 				}
-			} else if (IsAGraphic(sc.ch) && sc.ch != '\\') {
+			} else if (IsAGraphic(sc.ch)) {
 				if (lexer.HighlightOperator(HtmlTextBlock::Script, stylePrevNonWhite)) {
 					continue;
 				}
